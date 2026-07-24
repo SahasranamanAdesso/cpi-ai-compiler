@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc",
     "helloworld": "ts-node examples/helloworld.ts",
+    "groovy": "ts-node examples/groovy-script.ts",
     "ai-demo": "ts-node examples/ai-generation.ts",
     "e2e-demo": "ts-node examples/end-to-end.ts",
     "demo": "ts-node demo/server.ts",

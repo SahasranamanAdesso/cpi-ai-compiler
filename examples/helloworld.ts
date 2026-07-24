@@ -24,12 +24,12 @@ async function generateHelloWorld() {
     const contentModifier = new Component(
         "CallActivity_1",
         "Set Body",
-        "Enricher"
+        "Enricher",
+        {
+            // User properties (defaults come from Registry metadata)
+            body: "Hello from SAP Integration Suite!"
+        }
     );
-    // Add Content Modifier configuration
-    contentModifier.properties.activityType = "Enricher";
-    contentModifier.properties.bodyType = "constant";
-    contentModifier.properties.body = "Hello from SAP Integration Suite!";
 
     flow.addComponent(contentModifier);
 
@@ -41,17 +41,8 @@ async function generateHelloWorld() {
 
     console.log("✅ Mapped to BPMN IR");
 
-    // 3. Add Content Modifier properties
-    const contentModifierNode = definitions.process.nodes.find(
-        n => n.id === "CallActivity_1"
-    );
-    if (contentModifierNode) {
-        contentModifierNode.addProperty("activityType", "Enricher");
-        contentModifierNode.addProperty("bodyType", "constant");
-        contentModifierNode.addProperty("body", "Hello from SAP Integration Suite!");
-    }
-
-    // 4. Serialize to .iflw file
+    // 3. Serialize to .iflw file
+    // Note: Properties are now automatically injected by ComponentMapper from Registry metadata
     const tempDir = path.join(os.tmpdir(), 'HelloWorld');
 
     // Clean temp directory if exists
@@ -64,7 +55,7 @@ async function generateHelloWorld() {
 
     console.log("✅ Serialized to .iflw");
 
-    // 5. Package to ZIP
+    // 4. Package to ZIP
     const outputZip = path.join(process.cwd(), 'HelloWorld.zip');
 
     // Remove existing ZIP

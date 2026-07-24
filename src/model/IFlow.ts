@@ -1,5 +1,6 @@
 import { Component } from "./Component";
 import { Connection } from "./Connection";
+import { Resource } from "./Resource";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -10,6 +11,7 @@ import { Connection } from "./Connection";
  * An IFlow is a graph structure containing:
  * - Components (metadata-driven representations of CPI elements)
  * - Connections (sequence flows between components)
+ * - Resources (external artifacts like Groovy scripts, mappings, schemas)
  *
  * Architecture:
  *   IFlowDefinition (domain) → IFlow (IR) → BPMN XML (output)
@@ -29,6 +31,11 @@ export class IFlow {
      * Internal collection of connections (sequence flows) between components
      */
     private readonly connections: Connection[] = [];
+
+    /**
+     * Internal collection of resources (Groovy scripts, mappings, schemas, etc.)
+     */
+    private readonly resources: Resource[] = [];
 
     /**
      * Creates a new IFlow instance
@@ -75,5 +82,30 @@ export class IFlow {
      */
     public getConnections(): Connection[] {
         return this.connections;
+    }
+
+    /**
+     * Adds a resource to the integration flow
+     * @param resource - The resource to add (Groovy script, mapping, schema, etc.)
+     * @returns this IFlow instance for method chaining (Fluent API)
+     *
+     * @example
+     * ```typescript
+     * const flow = new IFlow("DataTransform");
+     * const script = new GroovyResource("transform.groovy", scriptContent);
+     * flow.addResource(script);
+     * ```
+     */
+    public addResource(resource: Resource): IFlow {
+        this.resources.push(resource);
+        return this;
+    }
+
+    /**
+     * Gets all resources in this flow
+     * @returns Array of all resources (scripts, mappings, schemas, etc.)
+     */
+    public getResources(): Resource[] {
+        return this.resources;
     }
 }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ZipArchive } from 'archiver';
+import { Resource } from '../model/Resource';
 
 /**
  * IflowPackager - Creates complete CPI artifact
@@ -11,6 +12,7 @@ import { ZipArchive } from 'archiver';
  * - metainfo.prop
  * - parameters.prop
  * - parameters.propdef
+ * - Resources (Groovy scripts, mappings, schemas)
  * - ZIP archive
  *
  * Directory structure:
@@ -24,6 +26,10 @@ import { ZipArchive } from 'archiver';
  *           parameters.propdef
  *           scenarioflows/integrationflow/
  *               HelloWorld.iflw
+ *           script/              (if Groovy scripts present)
+ *               transform.groovy
+ *           mapping/             (if mappings present)
+ *               CustomerMapping.mmap
  */
 export class IflowPackager {
 
@@ -33,8 +39,14 @@ export class IflowPackager {
      * @param flowDir - Directory containing .iflw file (e.g., /tmp/HelloWorld)
      * @param flowName - Name of the flow (e.g., "HelloWorld")
      * @param outputZip - Output ZIP path (e.g., /tmp/HelloWorld.zip)
+     * @param resources - Optional array of resources to package (scripts, mappings, schemas)
      */
-    async package(flowDir: string, flowName: string, outputZip: string): Promise<void> {
+    async package(
+        flowDir: string,
+        flowName: string,
+        outputZip: string,
+        resources?: Resource[]
+    ): Promise<void> {
 
         // Create MANIFEST.MF
         this.createManifest(flowDir, flowName);
@@ -47,6 +59,11 @@ export class IflowPackager {
 
         // Create parameters.prop and parameters.propdef
         this.createParameters(flowDir);
+
+        // Package resources if provided
+        if (resources && resources.length > 0) {
+            this.packageResources(flowDir, resources);
+        }
 
         // Create ZIP
         await this.createZip(flowDir, outputZip);
@@ -152,6 +169,66 @@ export class IflowPackager {
             ''
         ].join('\n');
         fs.writeFileSync(path.join(resourcesDir, 'parameters.propdef'), paramPropdef, 'utf-8');
+    }
+
+    /**
+     * Packages resources into the appropriate directories
+     *
+     * Resources are organized by type:
+     * - groovy → src/main/resources/script/
+     * - mapping → src/main/resources/mapping/
+     * - xsd → src/main/resources/schema/
+     * - xslt → src/main/resources/xslt/
+     *
+     * @param flowDir - Base flow directory
+     * @param resources - Array of resources to package
+     */
+    private packageResources(flowDir: string, resources: Resource[]): void {
+        const resourcesBaseDir = path.join(flowDir, 'src', 'main', 'resources');
+
+        resources.forEach(resource => {
+            // Determine target directory based on resource type
+            let targetDir: string;
+
+            switch (resource.type) {
+                case 'groovy':
+                    targetDir = path.join(resourcesBaseDir, 'script');
+                    break;
+                case 'mapping':
+                    targetDir = path.join(resourcesBaseDir, 'mapping');
+                    break;
+                case 'xsd':
+                    targetDir = path.join(resourcesBaseDir, 'schema');
+                    break;
+                case 'xslt':
+                    targetDir = path.join(resourcesBaseDir, 'xslt');
+                    break;
+                default:
+                    throw new Error(`Unsupported resource type: ${resource.type}`);
+            }
+
+            // Create target directory
+            fs.mkdirSync(targetDir, { recursive: true });
+
+            // Get resource content
+            let content: string;
+            if (resource.content) {
+                content = resource.content;
+            } else if (resource.filePath) {
+                if (!fs.existsSync(resource.filePath)) {
+                    throw new Error(`Resource file not found: ${resource.filePath}`);
+                }
+                content = fs.readFileSync(resource.filePath, 'utf-8');
+            } else {
+                throw new Error(`Resource must have either content or filePath: ${resource.name}`);
+            }
+
+            // Write resource to target directory
+            const targetPath = path.join(targetDir, resource.name);
+            fs.writeFileSync(targetPath, content, 'utf-8');
+
+            console.log(`✅ Packaged resource: ${resource.type}/${resource.name}`);
+        });
     }
 
     private createZip(sourceDir: string, outputZip: string): Promise<void> {

@@ -73,6 +73,28 @@ export class ComponentMapper {
             bpmnProperties.activityType = definition.activityType;
         }
 
+        // Inject metadata (if present)
+        if (definition.metadata) {
+            // Apply defaults first (user properties take precedence)
+            if (definition.metadata.defaultProperties) {
+                Object.entries(definition.metadata.defaultProperties).forEach(([key, value]) => {
+                    if (!(key in bpmnProperties)) {
+                        bpmnProperties[key] = value;
+                    }
+                });
+            }
+
+            // Inject cmdVariantUri and componentVersion from metadata
+            // These are required SAP properties and always come from metadata
+            bpmnProperties.cmdVariantUri = definition.metadata.cmdVariantUri;
+            bpmnProperties.componentVersion = definition.metadata.componentVersion;
+
+            // Inject operation if present
+            if (definition.metadata.operation) {
+                bpmnProperties.operation = definition.metadata.operation;
+            }
+        }
+
         // Create BpmnNode with BPMN element type from Registry
         return new BpmnNode(
             component.id,

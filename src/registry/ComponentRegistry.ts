@@ -30,6 +30,8 @@
  *   callActivity with activityType="Enricher"
  */
 
+import { ComponentMetadata } from "./ComponentMetadata";
+
 /**
  * ComponentDefinition - Metadata for a single CPI component
  */
@@ -51,6 +53,18 @@ export interface ComponentDefinition {
      * Example: "Enricher", "Router", "ScriptCollection"
      */
     activityType?: string;
+
+    /**
+     * Complete metadata for CallActivity-based components
+     *
+     * Contains all information needed to generate the component without
+     * hardcoding in writers: cmdVariantUri, componentVersion, default properties,
+     * and optional resource references.
+     *
+     * Only present for CallActivity-based processing components.
+     * Adapters (participant elements) do not have this metadata.
+     */
+    metadata?: ComponentMetadata;
 }
 
 /**
@@ -68,7 +82,18 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
     Enricher: {
         displayName: "Content Modifier",
         bpmnElement: "callActivity",
-        activityType: "Enricher"
+        activityType: "Enricher",
+        metadata: {
+            activityType: "Enricher",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::Enricher/version::1.6.3",
+            componentVersion: "1.6",
+            defaultProperties: {
+                bodyType: "constant",
+                propertyTable: "",
+                headerTable: "",
+                wrapContent: ""
+            }
+        }
     },
 
     /**
@@ -83,31 +108,61 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
     /**
      * Router
      * BPMN: <callActivity activityType="Router">
+     *
+     * Note: Implementation pending (Version 1.2.1+)
+     * Metadata structure prepared for future use
      */
     Router: {
         displayName: "Router",
         bpmnElement: "callActivity",
-        activityType: "Router"
+        activityType: "Router",
+        metadata: {
+            activityType: "Router",
+            operation: "Route",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::Router/version::1.0.0",
+            componentVersion: "1.0"
+        }
     },
 
     /**
      * Groovy Script
      * BPMN: <callActivity activityType="ScriptCollection">
+     *
+     * Note: Implementation pending (Version 1.2.1+)
+     * Metadata structure prepared for future use
+     * Requires resource packaging for .groovy files
      */
     ScriptCollection: {
         displayName: "Groovy Script",
         bpmnElement: "callActivity",
-        activityType: "ScriptCollection"
+        activityType: "ScriptCollection",
+        metadata: {
+            activityType: "ScriptCollection",
+            operation: "Execute",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::ScriptCollection/version::1.2.0",
+            componentVersion: "1.2",
+            resourceType: "groovy",
+            resourceReference: "script/{name}.groovy"
+        }
     },
 
     /**
      * Data Store Write
      * BPMN: <callActivity activityType="DBStorage">
+     *
+     * Note: Implementation pending (Version 1.2.1+)
+     * Metadata structure prepared for future use
      */
     DBStorage: {
         displayName: "Data Store",
         bpmnElement: "callActivity",
-        activityType: "DBStorage"
+        activityType: "DBStorage",
+        metadata: {
+            activityType: "DBStorage",
+            operation: "Write",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::DBStorage/version::1.0.0",
+            componentVersion: "1.0"
+        }
     }
 
 };
