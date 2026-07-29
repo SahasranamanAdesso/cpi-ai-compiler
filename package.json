@@ -8,6 +8,7 @@
     "build": "tsc",
     "helloworld": "ts-node examples/helloworld.ts",
     "groovy": "ts-node examples/groovy-script.ts",
+    "router": "ts-node examples/router.ts",
     "ai-demo": "ts-node examples/ai-generation.ts",
     "e2e-demo": "ts-node examples/end-to-end.ts",
     "demo": "ts-node demo/server.ts",

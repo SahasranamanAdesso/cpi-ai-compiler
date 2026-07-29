@@ -4,6 +4,7 @@ import { BpmnSequenceFlow } from "../ir/BpmnSequenceFlow";
 import { PropertyWriter } from "./PropertyWriter";
 import { EventWriter } from "./EventWriter";
 import { CallActivityWriter } from "./CallActivityWriter";
+import { ExclusiveGatewayWriter } from "./ExclusiveGatewayWriter";
 
 /**
  * ProcessWriter - Writes BPMN <bpmn2:process> element
@@ -13,6 +14,7 @@ export class ProcessWriter {
     private propertyWriter = new PropertyWriter();
     private eventWriter = new EventWriter();
     private callActivityWriter = new CallActivityWriter();
+    private exclusiveGatewayWriter = new ExclusiveGatewayWriter();
 
     write(process: BpmnProcess): string {
         const lines: string[] = [];
@@ -71,6 +73,8 @@ export class ProcessWriter {
                 nodeXml = this.eventWriter.write(node, nodeIncoming, nodeOutgoing);
             } else if (node.type === "callActivity") {
                 nodeXml = this.callActivityWriter.write(node, nodeIncoming, nodeOutgoing);
+            } else if (node.type === "exclusiveGateway") {
+                nodeXml = this.exclusiveGatewayWriter.write(node, nodeIncoming, nodeOutgoing);
             } else {
                 throw new Error(`Unsupported node type: ${node.type}`);
             }

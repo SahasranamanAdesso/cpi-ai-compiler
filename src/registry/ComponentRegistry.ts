@@ -107,21 +107,20 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
 
     /**
      * Router
-     * BPMN: <callActivity activityType="Router">
+     * BPMN: <exclusiveGateway>
      *
-     * Note: Implementation pending (Version 1.2.1+)
-     * Metadata structure prepared for future use
+     * Router is a flow-control component that implements conditional routing
+     * using BPMN Exclusive Gateway. Unlike processing components (CallActivity),
+     * Router uses gateway semantics for branching logic.
+     *
+     * Note: Gateways do not use activityType, cmdVariantUri, or componentVersion.
+     * These are CallActivity-specific metadata fields.
      */
     Router: {
         displayName: "Router",
-        bpmnElement: "callActivity",
-        activityType: "Router",
-        metadata: {
-            activityType: "Router",
-            operation: "Route",
-            cmdVariantUri: "ctype::FlowstepVariant/cname::Router/version::1.0.0",
-            componentVersion: "1.0"
-        }
+        bpmnElement: "exclusiveGateway"
+        // No activityType: Gateways don't use activityType
+        // No metadata: Gateways don't use CallActivity metadata
     },
 
     /**

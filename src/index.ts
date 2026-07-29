@@ -18,6 +18,7 @@ export { IFlow } from './model/IFlow';
 export { Component } from './model/Component';
 export { Connection } from './model/Connection';
 export { Resource } from './model/Resource';
+export { Router, Route } from './model/Router';
 export { GroovyScript } from './model/GroovyScript';
 export { GroovyResource } from './model/GroovyResource';
 
