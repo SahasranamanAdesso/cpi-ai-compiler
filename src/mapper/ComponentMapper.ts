@@ -89,9 +89,21 @@ export class ComponentMapper {
             bpmnProperties.cmdVariantUri = definition.metadata.cmdVariantUri;
             bpmnProperties.componentVersion = definition.metadata.componentVersion;
 
-            // Inject operation if present
+            // Inject optional SAP properties if present in metadata
             if (definition.metadata.operation) {
                 bpmnProperties.operation = definition.metadata.operation;
+            }
+
+            // Groovy Script-specific properties (SAP requires these even if empty)
+            // Evidence: IPRO_PRODUCT_HTTP.iflw lines 715-737
+            if (definition.metadata.subActivityType) {
+                bpmnProperties.subActivityType = definition.metadata.subActivityType;
+            }
+            if (definition.metadata.scriptFunction !== undefined) {
+                bpmnProperties.scriptFunction = definition.metadata.scriptFunction;
+            }
+            if (definition.metadata.scriptBundleId !== undefined) {
+                bpmnProperties.scriptBundleId = definition.metadata.scriptBundleId;
             }
         }
 

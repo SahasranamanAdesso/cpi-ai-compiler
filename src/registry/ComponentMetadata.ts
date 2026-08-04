@@ -37,10 +37,44 @@ export interface ComponentMetadata {
      * Examples:
      * - "Enricher" — Content Modifier
      * - "Router" — Message Router
-     * - "ScriptCollection" — Groovy Script
+     * - "Script" — Groovy Script (NOTE: "Script", NOT "ScriptCollection")
      * - "DBStorage" — Data Store Write
      */
     activityType: string;
+
+    /**
+     * SAP sub-activity type identifier (optional)
+     *
+     * Further distinguishes component variants within the same activityType.
+     * Required for Script components to distinguish Groovy from JavaScript.
+     *
+     * Examples:
+     * - "GroovyScript" — Groovy-based script
+     * - "JavaScript" — JavaScript-based script
+     *
+     * Evidence: IPRO_PRODUCT_HTTP.iflw line 735-737
+     */
+    subActivityType?: string;
+
+    /**
+     * Script function name (optional)
+     *
+     * For Script components, specifies the function name to execute.
+     * SAP requires this property even if empty.
+     *
+     * Evidence: IPRO_PRODUCT_HTTP.iflw line 715-717
+     */
+    scriptFunction?: string;
+
+    /**
+     * Script bundle ID (optional)
+     *
+     * For Script components, references an external script bundle.
+     * SAP requires this property even if empty.
+     *
+     * Evidence: IPRO_PRODUCT_HTTP.iflw line 719-721
+     */
+    scriptBundleId?: string;
 
     /**
      * Operation name (optional)

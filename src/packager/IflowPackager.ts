@@ -154,20 +154,16 @@ export class IflowPackager {
     private createParameters(flowDir: string): void {
         const resourcesDir = path.join(flowDir, 'src', 'main', 'resources');
 
-        // parameters.prop (empty for HelloWorld)
+        // parameters.prop - Traditional Java properties format with timestamp
         const paramProp = [
-            `#`,
-            `#${new Date().toISOString()}`,
+            `#${new Date().toUTCString()}`,
             ''
         ].join('\n');
         fs.writeFileSync(path.join(resourcesDir, 'parameters.prop'), paramProp, 'utf-8');
 
-        // parameters.propdef (empty for HelloWorld)
-        const paramPropdef = [
-            `#`,
-            `#${new Date().toISOString()}`,
-            ''
-        ].join('\n');
+        // parameters.propdef - XML structure as per SAP format
+        // Evidence: SAP reference IPRO_PRODUCT_HTTP/src/main/resources/parameters.propdef
+        const paramPropdef = '<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>';
         fs.writeFileSync(path.join(resourcesDir, 'parameters.propdef'), paramPropdef, 'utf-8');
     }
 

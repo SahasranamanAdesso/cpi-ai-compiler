@@ -125,21 +125,31 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
 
     /**
      * Groovy Script
-     * BPMN: <callActivity activityType="ScriptCollection">
+     * BPMN: <callActivity activityType="Script">
      *
-     * Note: Implementation pending (Version 1.2.1+)
-     * Metadata structure prepared for future use
-     * Requires resource packaging for .groovy files
+     * SAP-compatible metadata verified against IPRO_PRODUCT_HTTP export
+     * Evidence: lines 712-745 in IPRO_PRODUCT_HTTP.iflw
+     *
+     * Key properties (all required):
+     * - activityType: "Script" (NOT "ScriptCollection")
+     * - cmdVariantUri: cname::GroovyScript/version::1.1.2
+     * - componentVersion: "1.1" (NOT "1.2")
+     * - subActivityType: "GroovyScript"
+     * - script: resource path (NOT "scriptReference")
+     * - scriptFunction: empty value (required by SAP)
+     * - scriptBundleId: empty value (required by SAP)
      */
     ScriptCollection: {
         displayName: "Groovy Script",
         bpmnElement: "callActivity",
-        activityType: "ScriptCollection",
+        activityType: "Script",
         metadata: {
-            activityType: "ScriptCollection",
-            operation: "Execute",
-            cmdVariantUri: "ctype::FlowstepVariant/cname::ScriptCollection/version::1.2.0",
-            componentVersion: "1.2",
+            activityType: "Script",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::GroovyScript/version::1.1.2",
+            componentVersion: "1.1",
+            subActivityType: "GroovyScript",
+            scriptFunction: "",
+            scriptBundleId: "",
             resourceType: "groovy",
             resourceReference: "script/{name}.groovy"
         }
