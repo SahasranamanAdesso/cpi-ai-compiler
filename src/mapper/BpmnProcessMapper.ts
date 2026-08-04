@@ -308,6 +308,10 @@ export class BpmnProcessMapper {
                 diagram.addShape(new BpmnShape(node.id, node.id, 703, 142, 32, 32));
             } else if (node.type === "callActivity") {
                 diagram.addShape(new BpmnShape(node.id, node.id, 412, 132, 100, 60));
+            } else if (node.type === "exclusiveGateway") {
+                // Gateway shape - diamond (40x40)
+                // Evidence: SAP BPMN uses diamond shapes for gateways
+                diagram.addShape(new BpmnShape(node.id, node.id, 350, 138, 40, 40));
             }
         });
 
