@@ -109,18 +109,31 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
      * Router
      * BPMN: <exclusiveGateway>
      *
-     * Router is a flow-control component that implements conditional routing
-     * using BPMN Exclusive Gateway. Unlike processing components (CallActivity),
-     * Router uses gateway semantics for branching logic.
+     * SAP-compatible metadata verified against IPRO_PRODUCT_HTTP export
+     * Evidence: lines 932-955 in IPRO_PRODUCT_HTTP.iflw
      *
-     * Note: Gateways do not use activityType, cmdVariantUri, or componentVersion.
-     * These are CallActivity-specific metadata fields.
+     * CORRECTION: Previous assumption that gateways don't use SAP metadata was WRONG.
+     * SAP Integration Suite requires extension elements even for gateways.
+     *
+     * Key properties (all required):
+     * - activityType: "ExclusiveGateway" (SAP line 939-941)
+     * - cmdVariantUri: ctype::FlowstepVariant/cname::ExclusiveGateway/version::1.1.2 (SAP line 943-945)
+     * - componentVersion: "1.1" (SAP line 935-937)
+     * - throwException: "false" (SAP line 947-949)
+     * - default attribute: Specifies default route ID (SAP line 932)
      */
     Router: {
         displayName: "Router",
-        bpmnElement: "exclusiveGateway"
-        // No activityType: Gateways don't use activityType
-        // No metadata: Gateways don't use CallActivity metadata
+        bpmnElement: "exclusiveGateway",
+        activityType: "ExclusiveGateway",
+        metadata: {
+            activityType: "ExclusiveGateway",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::ExclusiveGateway/version::1.1.2",
+            componentVersion: "1.1",
+            defaultProperties: {
+                throwException: "false"
+            }
+        }
     },
 
     /**

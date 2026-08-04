@@ -92,8 +92,67 @@ export class ProcessWriter {
         return lines.join('\n');
     }
 
+    /**
+     * Writes a BPMN sequenceFlow element with optional SAP gateway route metadata
+     *
+     * Simple flow (no metadata):
+     * <sequenceFlow id="..." sourceRef="..." targetRef="..."/>
+     *
+     * Gateway route with condition (SAP-compatible):
+     * <sequenceFlow id="..." name="POST" sourceRef="..." targetRef="...">
+     *   <extensionElements>
+     *     <ifl:property><key>expressionType</key><value>NonXML</value></ifl:property>
+     *     <ifl:property><key>componentVersion</key><value>1.0</value></ifl:property>
+     *     <ifl:property><key>cmdVariantUri</key><value>ctype::FlowstepVariant/cname::GatewayRoute/version::1.0.0</value></ifl:property>
+     *   </extensionElements>
+     *   <conditionExpression id="..." xsi:type="bpmn2:tFormalExpression">${condition}</conditionExpression>
+     * </sequenceFlow>
+     *
+     * Evidence: IPRO_PRODUCT_HTTP.iflw lines 964-1013
+     */
     private writeSequenceFlow(flow: BpmnSequenceFlow): string {
-        return `    <bpmn2:sequenceFlow id="${flow.id}" sourceRef="${flow.sourceRef}" targetRef="${flow.targetRef}"/>`;
+        // Check if this is a simple flow (no name, no condition, no properties)
+        const isSimpleFlow = !flow.name && !flow.condition && Object.keys(flow.properties).length === 0;
+
+        if (isSimpleFlow) {
+            // Simple flow - single line
+            return `    <bpmn2:sequenceFlow id="${flow.id}" sourceRef="${flow.sourceRef}" targetRef="${flow.targetRef}"/>`;
+        }
+
+        // Complex flow (gateway route) - multi-line with metadata
+        const lines: string[] = [];
+
+        // Build name attribute if present
+        const nameAttr = flow.name ? ` name="${this.escape(flow.name)}"` : '';
+
+        // Opening tag
+        lines.push(`    <bpmn2:sequenceFlow id="${flow.id}"${nameAttr} sourceRef="${flow.sourceRef}" targetRef="${flow.targetRef}">`);
+
+        // Add extensionElements if properties exist
+        if (Object.keys(flow.properties).length > 0) {
+            lines.push(`        <bpmn2:extensionElements>`);
+
+            Object.entries(flow.properties).forEach(([key, value]) => {
+                lines.push(`            <ifl:property>`);
+                lines.push(`                <key>${key}</key>`);
+                lines.push(`                <value>${this.escape(value)}</value>`);
+                lines.push(`            </ifl:property>`);
+            });
+
+            lines.push(`        </bpmn2:extensionElements>`);
+        }
+
+        // Add conditionExpression if present
+        // Evidence: SAP line 979 - conditionExpression with unique ID
+        if (flow.condition) {
+            const exprId = `FormalExpression_${flow.id}_${Date.now()}`;
+            lines.push(`        <bpmn2:conditionExpression id="${exprId}" xsi:type="bpmn2:tFormalExpression">${this.escape(flow.condition)}</bpmn2:conditionExpression>`);
+        }
+
+        // Closing tag
+        lines.push(`    </bpmn2:sequenceFlow>`);
+
+        return lines.join('\n');
     }
 
     private indent(text: string, indentStr: string): string {
