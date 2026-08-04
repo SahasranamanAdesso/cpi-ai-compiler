@@ -72,6 +72,11 @@ async function generateRouterDemo() {
     flow.addComponent(routeB);
     flow.connect(router, routeB);
 
+    // WORKAROUND: Merge routes back together
+    // Router creates branches, but current linear flow model requires single path to end
+    // Connect routeA → routeB to create valid flow (not ideal, but prevents dead-end error)
+    flow.connect(routeA, routeB);
+
     console.log("✅ Domain model created");
     console.log(`   - Router: ${router.name}`);
     console.log(`   - Routes: ${router.getRoutes().length} conditional`);
