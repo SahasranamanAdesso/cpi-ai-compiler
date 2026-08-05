@@ -1,42 +1,12 @@
 /**
  * SftpAdapter - SFTP adapter for secure file transfer
  *
- * SFTP (SSH File Transfer Protocol) adapters enable secure file exchange
- * with external SFTP servers. Common use cases:
- * - Poll files from partner SFTP servers
- * - Upload files to external systems
- * - Archive processed files
- *
- * In SAP Integration Suite:
- * - BPMN element: <bpmn2:messageFlow> with ComponentType="SFTP"
- * - Sender: Poll files from SFTP server
- * - Receiver: Upload files to SFTP server
- *
- * Example usage:
- * ```typescript
- * // SFTP Sender - poll CSV files
- * const sender = SftpAdapter.sender({
- *     name: "Poll Orders from Partner",
- *     host: "sftp.partner.com",
- *     port: 22,
- *     directory: "/incoming/orders",
- *     filePattern: "*.csv",
- *     credentialName: "SFTP_Partner_Creds"
- * });
- * flow.setSender(sender);
- *
- * // SFTP Receiver - upload processed files
- * const receiver = SftpAdapter.receiver({
- *     name: "Upload to Archive",
- *     host: "archive.company.com",
- *     directory: "/archive/processed",
- *     fileName: "processed_${date:now:yyyyMMdd}.xml"
- * });
- * flow.setReceiver(receiver);
- * ```
+ * Properties based on actual SAP export: SFDP_SOAP_IDOC.zip
+ * MessageFlow ID: MessageFlow_1799656
+ * Version: 1.20.1
  *
  * SAP Evidence:
- * - SFTP Sender: SFDP_SOAP_IDOC.iflw lines 244-456
+ * - SFTP Sender: Send inbound External Stocks files from Movianto_Viadat to S4HANA.iflw
  * - cmdVariantUri: ctype::AdapterVariant/cname::sap:SFTP/tp::SFTP/mp::File/direction::Sender/version::1.20.1
  */
 export class SftpAdapter {
@@ -51,17 +21,13 @@ export class SftpAdapter {
     ) {
         this.name = name;
         this.direction = direction;
-        // Match SAP property order: ComponentType first, then spread adapter properties
-        // TransportProtocol and MessageProtocol should be in the spread, not here
         this.properties = {
-            ComponentType: "SFTP",
-            ComponentNS: "sap",
             ...properties
         };
     }
 
     /**
-     * Creates an SFTP Sender adapter (polls files from SFTP server)
+     * Creates an SFTP Sender adapter - EXACT SAP property order from export
      */
     static sender(config: {
         name?: string;
@@ -83,44 +49,59 @@ export class SftpAdapter {
             adapterName,
             "Sender",
             {
-                // Metadata first (SAP pattern)
-                Description: "",
-                Name: adapterName,
-                // Adapter configuration
-                host: config.host,
-                port: (config.port || 22).toString(),
-                credential_name: config.credentialName,
-                authentication: config.authentication || "User Credentials",
-                privateKeyAlias: config.privateKeyAlias || "",
-                connectTimeout: "10000",
-                path: config.directory,
-                fileName: config.filePattern || "*",
-                fileType: "binary",
-                file_sorting_criteria: config.sorting || "None",
-                scheduleKey: config.pollingInterval || "0 */5 * * * ?",
-                maxMessagesPerPoll: (config.maxMessagesPerPoll || 20).toString(),
-                postProcessing: config.postProcessing || "Delete File",
-                archiveDirectory: config.archiveDirectory || "",
+                // EXACT property order from SAP export SFDP_SOAP_IDOC
                 disconnect: "1",
+                fileName: config.filePattern || "*",
                 maximumFileSize: "40",
+                privateKeyAlias: config.privateKeyAlias || "",
                 emptyFileHandling: "processFile",
-                flatten: "0",
-                useClusterLock: "1",
-                fastExistsCheck: "1",
-                allowDeprecatedAlgorithms: "0",
-                // System properties
-                system: "Sender",
-                // Protocols (late, matching SAP pattern)
-                TransportProtocol: "SFTP",
-                MessageProtocol: "File",
-                // Version properties
-                componentVersion: "1.20",
-                ComponentSWCVId: "1.20.1",
-                ComponentSWCVName: "external",
-                MessageProtocolVersion: "1.20.1",
+                location_id: "",
+                Name: adapterName,
                 TransportProtocolVersion: "1.20.1",
-                // Direction last
-                direction: "Sender"
+                flatten: "0",
+                proxyPort: "8080",
+                path: config.directory,
+                useClusterLock: "1",
+                regex_filter: "0",
+                host: config.host,
+                connectTimeout: "10000",
+                file_sorting_criteria: config.sorting || "None",
+                maxMessagesPerPoll: (config.maxMessagesPerPoll || 20).toString(),
+                fastExistsCheck: "1",
+                ComponentSWCVId: "1.20.1",
+                credential_name: config.credentialName,
+                readLock: "none",
+                componentVersion: "1.20",
+                proxyHost: "",
+                system: "Sender",
+                stopOnException: "1",
+                scheduleKey: config.pollingInterval || "0 */5 * * * ?",
+                allowDeprecatedAlgorithms: "0",
+                TransportProtocol: "SFTP",
+                cmdVariantUri: "ctype::AdapterVariant/cname::sap:SFTP/tp::SFTP/mp::File/direction::Sender/version::1.20.1",
+                MessageProtocolVersion: "1.20.1",
+                file_lock_timeout: "3000",
+                Description: "",
+                readLockCheckInterval: "5000",
+                maximumReconnectAttempts: "3",
+                stepwise: "0",
+                ComponentNS: "sap",
+                recursive: "0",
+                ComponentSWCVName: "external",
+                noop: "0",
+                doneFileName: "${file:name}.done",
+                "file.move": config.archiveDirectory || "",
+                MessageProtocol: "File",
+                direction: "Sender",
+                authentication: config.authentication || "User Credentials",
+                file_sorting_direction: "asc",
+                ComponentType: "SFTP",
+                proxyProtocol: "socks5",
+                idempotentRepository: "database",
+                proxyType: "none",
+                proxyAlias: "",
+                reconnectDelay: "1000",
+                username: ""
             }
         );
     }
