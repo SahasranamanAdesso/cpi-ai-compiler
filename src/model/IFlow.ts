@@ -1,6 +1,13 @@
 import { Component } from "./Component";
 import { Connection } from "./Connection";
 import { Resource } from "./Resource";
+import { LocalIntegrationProcess } from "./LocalIntegrationProcess";
+import { ExceptionSubprocess } from "./ExceptionSubprocess";
+import { HttpAdapter } from "./HttpAdapter";
+import { ODataAdapter } from "./ODataAdapter";
+import { SftpAdapter } from "./SftpAdapter";
+import { SoapAdapter } from "./SoapAdapter";
+import { IdocAdapter } from "./IdocAdapter";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -36,6 +43,26 @@ export class IFlow {
      * Internal collection of resources (Groovy scripts, mappings, schemas, etc.)
      */
     private readonly resources: Resource[] = [];
+
+    /**
+     * Internal collection of Local Integration Processes (subprocesses)
+     */
+    private readonly subProcesses: LocalIntegrationProcess[] = [];
+
+    /**
+     * Internal collection of Exception Subprocesses (error handlers)
+     */
+    private readonly exceptionSubprocesses: ExceptionSubprocess[] = [];
+
+    /**
+     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, etc.)
+     */
+    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
+
+    /**
+     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, etc.)
+     */
+    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
 
     /**
      * Creates a new IFlow instance
@@ -107,5 +134,77 @@ export class IFlow {
      */
     public getResources(): Resource[] {
         return this.resources;
+    }
+
+    /**
+     * Adds a Local Integration Process (subprocess) to the integration flow
+     * @param subprocess - The Local Integration Process to add
+     * @returns this IFlow instance for method chaining (Fluent API)
+     */
+    public addSubProcess(subprocess: LocalIntegrationProcess): IFlow {
+        this.subProcesses.push(subprocess);
+        return this;
+    }
+
+    /**
+     * Gets all Local Integration Processes in this flow
+     * @returns Array of all subprocesses added to this flow
+     */
+    public getSubProcesses(): LocalIntegrationProcess[] {
+        return this.subProcesses;
+    }
+
+    /**
+     * Adds an Exception Subprocess (error handler) to the integration flow
+     * @param exceptionSubprocess - The Exception Subprocess to add
+     * @returns this IFlow instance for method chaining (Fluent API)
+     */
+    public addExceptionSubprocess(exceptionSubprocess: ExceptionSubprocess): IFlow {
+        this.exceptionSubprocesses.push(exceptionSubprocess);
+        return this;
+    }
+
+    /**
+     * Gets all Exception Subprocesses in this flow
+     * @returns Array of all exception subprocesses added to this flow
+     */
+    public getExceptionSubprocesses(): ExceptionSubprocess[] {
+        return this.exceptionSubprocesses;
+    }
+
+    /**
+     * Sets the sender adapter for this integration flow
+     * @param adapter - HTTP, OData, SFTP, SOAP, or IDoc sender adapter
+     * @returns this IFlow instance for method chaining
+     */
+    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter): IFlow {
+        this.sender = adapter;
+        return this;
+    }
+
+    /**
+     * Gets the sender adapter
+     * @returns Sender adapter or undefined
+     */
+    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | undefined {
+        return this.sender;
+    }
+
+    /**
+     * Sets the receiver adapter for this integration flow
+     * @param adapter - HTTP, OData, SFTP, SOAP, or IDoc receiver adapter
+     * @returns this IFlow instance for method chaining
+     */
+    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter): IFlow {
+        this.receiver = adapter;
+        return this;
+    }
+
+    /**
+     * Gets the receiver adapter
+     * @returns Receiver adapter or undefined
+     */
+    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | undefined {
+        return this.receiver;
     }
 }

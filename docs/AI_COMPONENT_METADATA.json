@@ -1,0 +1,358 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SAP Integration SDK - Component Metadata",
+  "version": "1.3.0",
+  "description": "Machine-readable metadata for AI systems to generate Integration Flows",
+  "components": {
+    "IFlow": {
+      "type": "container",
+      "description": "Container for an entire Integration Flow",
+      "constructor": {
+        "parameters": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "constraints": {
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\w\\s-]+$"
+            },
+            "description": "Integration Flow name displayed in SAP UI"
+          }
+        ]
+      },
+      "methods": {
+        "addComponent": {
+          "parameters": [{"name": "component", "type": "Component"}],
+          "returns": "IFlow",
+          "description": "Add component to flow (fluent API)"
+        },
+        "connect": {
+          "parameters": [
+            {"name": "from", "type": "Component"},
+            {"name": "to", "type": "Component"}
+          ],
+          "returns": "IFlow",
+          "description": "Connect two components (fluent API)"
+        },
+        "addResource": {
+          "parameters": [{"name": "resource", "type": "Resource"}],
+          "returns": "IFlow",
+          "description": "Add resource like Groovy script (fluent API)"
+        }
+      },
+      "validation": {
+        "required": ["name"],
+        "rules": ["IF-001", "IF-002", "IF-003", "IF-004", "IF-005"]
+      },
+      "examples": [
+        "const flow = new IFlow(\"Order Processing\");"
+      ]
+    },
+    "Component": {
+      "type": "processing",
+      "description": "Generic component for message processing",
+      "constructor": {
+        "parameters": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "constraints": {
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "description": "Unique component identifier"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "constraints": {
+              "minLength": 1
+            },
+            "description": "Human-readable component name"
+          },
+          {
+            "name": "componentType",
+            "type": "string",
+            "required": true,
+            "enum": ["Enricher", "Router", "ScriptCollection"],
+            "description": "Component type determining SAP mapping"
+          },
+          {
+            "name": "properties",
+            "type": "object",
+            "required": false,
+            "description": "Component-specific configuration"
+          }
+        ]
+      },
+      "componentTypes": {
+        "Enricher": {
+          "purpose": "Content Modifier - set body, headers, properties",
+          "requiredProperties": {
+            "oneOf": ["body", "headerTable", "propertyTable"]
+          },
+          "optionalProperties": ["bodyType", "wrapContent"],
+          "propertySchemas": {
+            "body": {"type": "string"},
+            "headerTable": {"type": "object", "additionalProperties": {"type": "string"}},
+            "propertyTable": {"type": "object", "additionalProperties": {"type": "string"}},
+            "bodyType": {"type": "string", "enum": ["constant", "expression"]}
+          }
+        }
+      },
+      "validation": {
+        "rules": ["CMP-001", "CMP-002", "CMP-003", "CMP-004"]
+      },
+      "examples": [
+        "new Component(\"CMP_1\", \"Set Body\", \"Enricher\", {body: \"Hello\"})",
+        "new Component(\"CMP_2\", \"Add Headers\", \"Enricher\", {headerTable: {Country: \"IN\"}})"
+      ]
+    },
+    "Router": {
+      "type": "gateway",
+      "description": "Conditional routing based on message content",
+      "extends": "Component",
+      "constructor": {
+        "parameters": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "description": "Router name"
+          },
+          {
+            "name": "properties",
+            "type": "object",
+            "required": false,
+            "description": "Additional properties"
+          }
+        ]
+      },
+      "methods": {
+        "when": {
+          "parameters": [{"name": "condition", "type": "string"}],
+          "returns": "Router",
+          "description": "Define conditional route",
+          "constraints": {
+            "condition": {
+              "pattern": "^\\$\\{(header|property)\\.[\\w]+\\}\\s*[=<>!]+\\s*.+$",
+              "syntax": "SAP Simple Expression Language",
+              "examples": [
+                "${header.Country} = 'IN'",
+                "${property.OrderType} = 'urgent'",
+                "${header.Amount} > 1000"
+              ]
+            }
+          }
+        },
+        "otherwise": {
+          "parameters": [],
+          "returns": "Router",
+          "description": "Define default route (max 1 per router)"
+        }
+      },
+      "validation": {
+        "rules": ["RTR-001", "RTR-002", "RTR-003", "RTR-004", "RTR-005"],
+        "constraints": {
+          "minRoutes": 1,
+          "maxDefaultRoutes": 1,
+          "connectionCardinality": "connections_from_router == routes_defined"
+        }
+      },
+      "examples": [
+        "const router = new Router(\"Route by Country\").when(\"${header.Country} = 'IN'\").otherwise();"
+      ]
+    },
+    "GroovyScript": {
+      "type": "script",
+      "description": "Execute Groovy code for transformation",
+      "extends": "Component",
+      "constructor": {
+        "parameters": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "description": "Script component name"
+          },
+          {
+            "name": "scriptName",
+            "type": "string",
+            "required": true,
+            "constraints": {
+              "pattern": "^[\\w-]+\\.groovy$"
+            },
+            "description": "Groovy script filename"
+          },
+          {
+            "name": "additionalProperties",
+            "type": "object",
+            "required": false,
+            "description": "Additional SAP properties"
+          }
+        ]
+      },
+      "requiredPairing": {
+        "resource": "GroovyResource",
+        "constraint": "scriptName must match GroovyResource name"
+      },
+      "validation": {
+        "rules": ["GS-001", "GS-002", "GS-003"]
+      },
+      "examples": [
+        "new GroovyScript(\"Transform\", \"transform.groovy\")"
+      ]
+    },
+    "GroovyResource": {
+      "type": "resource",
+      "description": "Groovy script file packaged with flow",
+      "implements": "Resource",
+      "constructor": {
+        "parameters": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "constraints": {
+              "pattern": "^[\\w-]+\\.groovy$"
+            },
+            "description": "Script filename"
+          },
+          {
+            "name": "content",
+            "type": "string | Buffer",
+            "required": false,
+            "description": "Inline script content"
+          },
+          {
+            "name": "path",
+            "type": "string",
+            "required": false,
+            "description": "Filesystem path to script"
+          }
+        ]
+      },
+      "constraints": {
+        "contentOrPath": "Either content or path must be provided"
+      },
+      "scriptStructure": {
+        "requiredImports": [
+          "import com.sap.gateway.ip.core.customdev.util.Message;"
+        ],
+        "requiredMethod": "def Message processData(Message message)"
+      },
+      "validation": {
+        "rules": ["RES-001", "RES-002", "RES-003"]
+      },
+      "examples": [
+        "new GroovyResource(\"script.groovy\", \"def Message processData(Message m) { return m; }\")"
+      ]
+    }
+  },
+  "usagePatterns": {
+    "linearFlow": {
+      "description": "Simple sequential processing",
+      "pattern": [
+        "IFlow creation",
+        "Component A creation",
+        "Component B creation",
+        "addComponent(A)",
+        "addComponent(B)",
+        "connect(A, B)"
+      ],
+      "example": "flow.addComponent(a).addComponent(b).connect(a, b)"
+    },
+    "routerFlow": {
+      "description": "Conditional branching",
+      "pattern": [
+        "IFlow creation",
+        "Router creation with routes",
+        "Target components creation",
+        "addComponent(router)",
+        "addComponent(targets...)",
+        "connect(router, target) for each route"
+      ],
+      "constraints": [
+        "Number of .connect(router, X) must equal number of routes",
+        "First connection matches first .when()",
+        "Last connection matches .otherwise() if present"
+      ]
+    },
+    "transformFlow": {
+      "description": "Groovy script transformation",
+      "pattern": [
+        "IFlow creation",
+        "GroovyScript creation",
+        "GroovyResource creation with same filename",
+        "addComponent(script)",
+        "addResource(resource)"
+      ],
+      "constraints": [
+        "GroovyScript.scriptName == GroovyResource.name"
+      ]
+    }
+  },
+  "validationRules": {
+    "summary": {
+      "totalRules": 24,
+      "errorRules": 17,
+      "warningRules": 7
+    },
+    "ruleCategories": {
+      "IFlow": ["IF-001", "IF-002", "IF-003", "IF-004", "IF-005"],
+      "Component": ["CMP-001", "CMP-002", "CMP-003", "CMP-004"],
+      "Router": ["RTR-001", "RTR-002", "RTR-003", "RTR-004", "RTR-005"],
+      "GroovyScript": ["GS-001", "GS-002", "GS-003"],
+      "Connection": ["CON-001", "CON-002", "CON-003", "CON-004"],
+      "Resource": ["RES-001", "RES-002", "RES-003"]
+    }
+  },
+  "expressionLanguage": {
+    "name": "SAP Simple Expression Language",
+    "syntax": {
+      "variableAccess": "${header.Name} or ${property.Name}",
+      "comparison": "Single = for equality (NOT ==)",
+      "stringLiterals": "Single quotes only",
+      "operators": ["=", "!=", ">", "<", ">=", "<="]
+    },
+    "examples": {
+      "valid": [
+        "${header.Country} = 'IN'",
+        "${property.Amount} > 1000",
+        "${header.Status} != 'FAILED'"
+      ],
+      "invalid": [
+        "${header.Country} == 'IN'  // Use single =",
+        "${header.Country} = \"IN\"  // Use single quotes",
+        "header.Country = 'IN'  // Missing ${}"
+      ]
+    }
+  },
+  "aiGuidelines": {
+    "mustDo": [
+      "Import SDK classes",
+      "Create IFlow first",
+      "Add components before connecting",
+      "Match router routes to connections",
+      "Pair GroovyScript with GroovyResource",
+      "Use unique component IDs",
+      "Export flow at end"
+    ],
+    "mustNotDo": [
+      "Generate XML directly",
+      "Use compiler internals (BpmnNode, etc.)",
+      "Create custom component types",
+      "Hardcode SAP metadata",
+      "Use == in conditions (use single =)"
+    ],
+    "errorRecovery": {
+      "duplicateID": "Generate new unique ID using timestamp or index",
+      "routeMismatch": "Add connections to match route count",
+      "missingResource": "Create and add matching GroovyResource",
+      "notAdded": "Call addComponent() before connect()"
+    }
+  }
+}

@@ -52,12 +52,17 @@ export class CollaborationWriter {
                 `targetRef="${messageFlow.targetRef}"`
             ];
 
-            if (messageFlow.properties.length === 0) {
+            const props = messageFlow.getProperties ? messageFlow.getProperties() : messageFlow.properties;
+            const propKeys = Object.keys(props);
+
+            if (propKeys.length === 0) {
                 lines.push(`    <bpmn2:messageFlow ${attrs.join(' ')}/>`);
             } else {
                 lines.push(`    <bpmn2:messageFlow ${attrs.join(' ')}>`);
                 lines.push(`        <bpmn2:extensionElements>`);
-                lines.push(this.propertyWriter.writeAll(messageFlow.properties, "            "));
+                // Convert properties object to IflProperty array
+                const iflProps = propKeys.map(key => ({ key, value: props[key] }));
+                lines.push(this.propertyWriter.writeAll(iflProps, "            "));
                 lines.push(`        </bpmn2:extensionElements>`);
                 lines.push(`    </bpmn2:messageFlow>`);
             }

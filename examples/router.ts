@@ -38,13 +38,12 @@ async function generateRouterDemo() {
     // Create Router component
     const router = new Router("Route by Type");
 
-    // Define routes using fluent API
-    // Note: Route targets and conditions are stored in Router model
-    // but not yet mapped to BPMN conditionExpression (future enhancement)
+    // Define route conditions
+    // Route 1: Conditional route for Type A
+    // Route 2: Default route (no condition - catches everything else)
     router
-        .when("${header.type} == 'A'")
-        .when("${header.type} == 'B'")
-        .otherwise();
+        .when("${header.type} = 'A'")  // SAP uses single = for comparison
+        .otherwise();                   // Default route
 
     flow.addComponent(router);
 
@@ -114,17 +113,16 @@ async function generateRouterDemo() {
 
     console.log(`\n🎉 SUCCESS! Generated ${outputZip}`);
     console.log(`\nGenerated BPMN includes:`);
-    console.log(`   - <bpmn2:exclusiveGateway> for Router`);
-    console.log(`   - Multiple outgoing sequence flows`);
-    console.log(`   - Conditional routing branches`);
+    console.log(`   ✓ <bpmn2:exclusiveGateway> with SAP metadata`);
+    console.log(`   ✓ default attribute for default route`);
+    console.log(`   ✓ Sequence flows with gateway route metadata`);
+    console.log(`   ✓ conditionExpression for conditional routes`);
     console.log(`\nNext steps:`);
     console.log(`1. Open SAP Integration Suite`);
     console.log(`2. Navigate to Design → Integrations`);
     console.log(`3. Click Import`);
     console.log(`4. Upload RouterDemo.zip`);
-    console.log(`5. Verify Router appears as Exclusive Gateway`);
-    console.log(`\nNote: Routing conditions (conditionExpression) are stored in Router model`);
-    console.log(`but not yet serialized to BPMN. This is planned for v1.2.3.`);
+    console.log(`5. Verify no validation errors`);
 
     // Clean up temp directory
     fs.rmSync(tempDir, { recursive: true, force: true });

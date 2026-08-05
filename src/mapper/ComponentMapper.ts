@@ -86,7 +86,16 @@ export class ComponentMapper {
 
             // Inject cmdVariantUri and componentVersion from metadata
             // These are required SAP properties and always come from metadata
-            bpmnProperties.cmdVariantUri = definition.metadata.cmdVariantUri;
+
+            // Special case: Data Store cmdVariantUri uses operation name
+            // Evidence: Agg Test.iflw line 282: ctype::FlowstepVariant/cname::put/version::1.7.1
+            if (definition.activityType === "DBstorage" && bpmnProperties.operation) {
+                const operation = bpmnProperties.operation;
+                bpmnProperties.cmdVariantUri = `ctype::FlowstepVariant/cname::${operation}/version::1.7.1`;
+            } else {
+                bpmnProperties.cmdVariantUri = definition.metadata.cmdVariantUri;
+            }
+
             bpmnProperties.componentVersion = definition.metadata.componentVersion;
 
             // Inject optional SAP properties if present in metadata

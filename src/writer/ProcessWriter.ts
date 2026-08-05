@@ -5,6 +5,7 @@ import { PropertyWriter } from "./PropertyWriter";
 import { EventWriter } from "./EventWriter";
 import { CallActivityWriter } from "./CallActivityWriter";
 import { ExclusiveGatewayWriter } from "./ExclusiveGatewayWriter";
+import { ParallelGatewayWriter } from "./ParallelGatewayWriter";
 
 /**
  * ProcessWriter - Writes BPMN <bpmn2:process> element
@@ -15,6 +16,7 @@ export class ProcessWriter {
     private eventWriter = new EventWriter();
     private callActivityWriter = new CallActivityWriter();
     private exclusiveGatewayWriter = new ExclusiveGatewayWriter();
+    private parallelGatewayWriter = new ParallelGatewayWriter();
 
     write(process: BpmnProcess): string {
         const lines: string[] = [];
@@ -74,7 +76,15 @@ export class ProcessWriter {
             } else if (node.type === "callActivity") {
                 nodeXml = this.callActivityWriter.write(node, nodeIncoming, nodeOutgoing);
             } else if (node.type === "exclusiveGateway") {
-                nodeXml = this.exclusiveGatewayWriter.write(node, nodeIncoming, nodeOutgoing);
+                // Find default route for this gateway
+                // Default route is the one WITHOUT a condition expression
+                // Evidence: IPRO_PRODUCT_HTTP.iflw line 981-996 (default route has no conditionExpression)
+                const defaultRouteId = this.findDefaultRoute(process, node.id);
+                nodeXml = this.exclusiveGatewayWriter.write(node, nodeIncoming, nodeOutgoing, defaultRouteId);
+            } else if (node.type === "parallelGateway") {
+                // Parallel Gateway (Multicast) - no default route, all branches execute
+                // Evidence: IPRO_SRM_MM_MAIN.iflw lines 1397-1421
+                nodeXml = this.parallelGatewayWriter.write(node, nodeIncoming, nodeOutgoing);
             } else {
                 throw new Error(`Unsupported node type: ${node.type}`);
             }
@@ -153,6 +163,26 @@ export class ProcessWriter {
         lines.push(`    </bpmn2:sequenceFlow>`);
 
         return lines.join('\n');
+    }
+
+    /**
+     * Finds the default route ID for an exclusive gateway
+     *
+     * The default route is identified by having NO conditionExpression
+     * Evidence: IPRO_PRODUCT_HTTP.iflw lines 981-996
+     *
+     * @param process - The BPMN process containing the flows
+     * @param gatewayId - The gateway node ID
+     * @returns The sequence flow ID of the default route, or undefined
+     */
+    private findDefaultRoute(process: BpmnProcess, gatewayId: string): string | undefined {
+        // Find all flows from this gateway
+        const gatewayFlows = process.flows.filter(flow => flow.sourceRef === gatewayId);
+
+        // Default route is the one without a condition
+        const defaultFlow = gatewayFlows.find(flow => !flow.condition);
+
+        return defaultFlow?.id;
     }
 
     private indent(text: string, indentStr: string): string {

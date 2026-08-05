@@ -173,8 +173,8 @@ export class IflowPackager {
      * Resources are organized by type:
      * - groovy → src/main/resources/script/
      * - mapping → src/main/resources/mapping/
-     * - xsd → src/main/resources/schema/
-     * - xslt → src/main/resources/xslt/
+     * - xsd → src/main/resources/xsd/
+     * - xslt → src/main/resources/mapping/ (same as .mmap files)
      *
      * @param flowDir - Base flow directory
      * @param resources - Array of resources to package
@@ -194,10 +194,12 @@ export class IflowPackager {
                     targetDir = path.join(resourcesBaseDir, 'mapping');
                     break;
                 case 'xsd':
-                    targetDir = path.join(resourcesBaseDir, 'schema');
+                    targetDir = path.join(resourcesBaseDir, 'xsd');
                     break;
                 case 'xslt':
-                    targetDir = path.join(resourcesBaseDir, 'xslt');
+                    // XSLT files are stored in mapping/ directory (same as .mmap files)
+                    // Evidence: POC2 src/main/resources/mapping/XSLTMapping1.xsl
+                    targetDir = path.join(resourcesBaseDir, 'mapping');
                     break;
                 default:
                     throw new Error(`Unsupported resource type: ${resource.type}`);

@@ -10,6 +10,8 @@ import { BpmnDiagram } from "../ir/BpmnDiagram";
 import { BpmnShape } from "../ir/BpmnShape";
 import { BpmnEdge } from "../ir/BpmnEdge";
 import { ComponentMapper } from "./ComponentMapper";
+import { Router } from "../model/Router";
+import { Multicast } from "../model/Multicast";
 
 /**
  * BpmnProcessMapper - Maps entire IFlow to complete BpmnDefinitions
@@ -150,13 +152,81 @@ export class BpmnProcessMapper {
         }
 
         // Component connections
+        // Track route index per gateway for proper metadata assignment
+        const gatewayRouteIndex = new Map<string, number>();
+
         connections.forEach((connection, index) => {
-            const seqFlow = new BpmnSequenceFlow(
-                `SequenceFlow_${index + 4}`,
-                connection.from.id,
-                connection.to.id
-            );
-            process.flows.push(seqFlow);
+            const flowId = `SequenceFlow_${index + 4}`;
+
+            // Check if source is a Router (exclusive gateway) or Multicast (parallel gateway)
+            const isFromRouter = connection.from instanceof Router;
+            const isFromMulticast = connection.from instanceof Multicast;
+
+            if (isFromRouter) {
+                // This is a Router route (exclusive gateway) - add conditional SAP metadata
+                const router = connection.from as Router;
+                const routes = router.getAllRoutes();
+
+                // Get current route index for this gateway
+                const currentIndex = gatewayRouteIndex.get(router.id) || 0;
+                gatewayRouteIndex.set(router.id, currentIndex + 1);
+
+                // Get the corresponding route (if defined)
+                const route = routes[currentIndex];
+
+                // Determine if this is the default route
+                const isDefaultRoute = route && (!route.condition || route.condition === "");
+
+                // Create route name from condition or use "Default"
+                const routeName = route?.name || (isDefaultRoute ? "Default" : `Route ${currentIndex + 1}`);
+
+                // Create sequence flow with SAP gateway route metadata
+                // Evidence: IPRO_PRODUCT_HTTP.iflw lines 964-1013
+                const routeProperties: Record<string, string> = {
+                    expressionType: isDefaultRoute ? "XML" : "NonXML",  // Evidence: SAP line 968, 985
+                    componentVersion: "1.0",                              // Evidence: SAP line 972, 989
+                    cmdVariantUri: "ctype::FlowstepVariant/cname::GatewayRoute/version::1.0.0"  // Evidence: SAP line 976, 993
+                };
+
+                const seqFlow = new BpmnSequenceFlow(
+                    flowId,
+                    connection.from.id,
+                    connection.to.id,
+                    routeName,                                  // Route name attribute
+                    isDefaultRoute ? undefined : route?.condition,  // Condition (only for non-default routes)
+                    routeProperties                            // SAP metadata
+                );
+
+                process.flows.push(seqFlow);
+            } else if (isFromMulticast) {
+                // This is a Multicast branch (parallel gateway) - simple flow, no conditions
+                // Evidence: IPRO_SRM_MM_MAIN.iflw lines 1416-1420 (outgoing flows have no conditions)
+                const multicast = connection.from as Multicast;
+
+                // Get current branch index for this multicast
+                const currentIndex = gatewayRouteIndex.get(multicast.id) || 0;
+                gatewayRouteIndex.set(multicast.id, currentIndex + 1);
+
+                // Simple sequence flow - all branches execute, no conditions
+                const seqFlow = new BpmnSequenceFlow(
+                    flowId,
+                    connection.from.id,
+                    connection.to.id,
+                    "",       // No name needed
+                    undefined, // No condition (all branches execute)
+                    {}        // No special properties for parallel branches
+                );
+
+                process.flows.push(seqFlow);
+            } else {
+                // Regular connection (not from gateway) - no special metadata
+                const seqFlow = new BpmnSequenceFlow(
+                    flowId,
+                    connection.from.id,
+                    connection.to.id
+                );
+                process.flows.push(seqFlow);
+            }
         });
 
         // Last component to end event
@@ -170,90 +240,124 @@ export class BpmnProcessMapper {
             process.flows.push(lastFlow);
         }
 
-        // Message flow from sender to start event with HTTPS adapter properties
+        // Message flow from sender to start event
+        // Use custom sender adapter if provided, otherwise default HTTPS
+        const sender = flow.getSender();
         const senderMessageFlow = new BpmnMessageFlow(
             "MessageFlow_4",
-            "HTTPS",
+            sender ? sender.name : "HTTPS",
             "Participant_1",
             "StartEvent_2"
         );
-        senderMessageFlow.addProperty("ComponentType", "HTTPS");
-        senderMessageFlow.addProperty("Description", "");
-        senderMessageFlow.addProperty("maximumBodySize", "40");
-        senderMessageFlow.addProperty("ComponentNS", "sap");
-        senderMessageFlow.addProperty("componentVersion", "1.5");
-        senderMessageFlow.addProperty("urlPath", "/hello");
-        senderMessageFlow.addProperty("Name", "HTTPS");
-        senderMessageFlow.addProperty("TransportProtocolVersion", "1.5.2");
-        senderMessageFlow.addProperty("ComponentSWCVName", "external");
-        senderMessageFlow.addProperty("system", "Sender");
-        senderMessageFlow.addProperty("xsrfProtection", "1");
-        senderMessageFlow.addProperty("TransportProtocol", "HTTPS");
-        senderMessageFlow.addProperty("cmdVariantUri", "ctype::AdapterVariant/cname::sap:HTTPS/tp::HTTPS/mp::None/direction::Sender/version::1.5.2");
-        senderMessageFlow.addProperty("userRole", "ESBMessaging.send");
-        senderMessageFlow.addProperty("senderAuthType", "RoleBased");
-        senderMessageFlow.addProperty("MessageProtocol", "None");
-        senderMessageFlow.addProperty("MessageProtocolVersion", "1.5.2");
-        senderMessageFlow.addProperty("ComponentSWCVId", "1.5.2");
-        senderMessageFlow.addProperty("direction", "Sender");
-        senderMessageFlow.addProperty("clientCertificates", "");
+
+        if (sender) {
+            // Use custom sender configuration
+            const senderProps = sender.properties;
+            Object.keys(senderProps).forEach(key => {
+                senderMessageFlow.addProperty(key, senderProps[key]);
+            });
+            // Add cmdVariantUri if adapter has the method
+            if ('getCmdVariantUri' in sender && typeof sender.getCmdVariantUri === 'function') {
+                senderMessageFlow.addProperty("cmdVariantUri", sender.getCmdVariantUri());
+            }
+            senderMessageFlow.addProperty("direction", "Sender");
+        } else {
+            // Default HTTPS sender configuration
+            senderMessageFlow.addProperty("ComponentType", "HTTPS");
+            senderMessageFlow.addProperty("Description", "");
+            senderMessageFlow.addProperty("maximumBodySize", "40");
+            senderMessageFlow.addProperty("ComponentNS", "sap");
+            senderMessageFlow.addProperty("componentVersion", "1.5");
+            senderMessageFlow.addProperty("urlPath", "/hello");
+            senderMessageFlow.addProperty("Name", "HTTPS");
+            senderMessageFlow.addProperty("TransportProtocolVersion", "1.5.2");
+            senderMessageFlow.addProperty("ComponentSWCVName", "external");
+            senderMessageFlow.addProperty("system", "Sender");
+            senderMessageFlow.addProperty("xsrfProtection", "1");
+            senderMessageFlow.addProperty("TransportProtocol", "HTTPS");
+            senderMessageFlow.addProperty("cmdVariantUri", "ctype::AdapterVariant/cname::sap:HTTPS/tp::HTTPS/mp::None/direction::Sender/version::1.5.2");
+            senderMessageFlow.addProperty("userRole", "ESBMessaging.send");
+            senderMessageFlow.addProperty("senderAuthType", "RoleBased");
+            senderMessageFlow.addProperty("MessageProtocol", "None");
+            senderMessageFlow.addProperty("MessageProtocolVersion", "1.5.2");
+            senderMessageFlow.addProperty("ComponentSWCVId", "1.5.2");
+            senderMessageFlow.addProperty("direction", "Sender");
+            senderMessageFlow.addProperty("clientCertificates", "");
+        }
         collaboration.addMessageFlow(senderMessageFlow);
 
-        // Message flow from end event to receiver with HTTP adapter properties
+        // Message flow from end event to receiver
+        // Use custom receiver adapter if provided, otherwise default HTTP
+        const receiver = flow.getReceiver();
         const receiverMessageFlow = new BpmnMessageFlow(
             "MessageFlow_5",
-            "HTTP",
+            receiver ? receiver.name : "HTTP",
             "EndEvent_2",
             "Participant_2"
         );
-        receiverMessageFlow.addProperty("apiName", "");
-        receiverMessageFlow.addProperty("Description", "");
-        receiverMessageFlow.addProperty("methodSourceExpression", "");
-        receiverMessageFlow.addProperty("apiArtifactType", "");
-        receiverMessageFlow.addProperty("providerAuth", "");
-        receiverMessageFlow.addProperty("retryOnExceptionsTable", "");
-        receiverMessageFlow.addProperty("ComponentNS", "sap");
-        receiverMessageFlow.addProperty("privateKeyAlias", "");
-        receiverMessageFlow.addProperty("httpMethod", "POST");
-        receiverMessageFlow.addProperty("apiprovider_location_id", "");
-        receiverMessageFlow.addProperty("allowedResponseHeaders", "*");
-        receiverMessageFlow.addProperty("Name", "HTTP");
-        receiverMessageFlow.addProperty("internetProxyType", "");
-        receiverMessageFlow.addProperty("TransportProtocolVersion", "1.20.1");
-        receiverMessageFlow.addProperty("retryOnException", "false");
-        receiverMessageFlow.addProperty("proxyPort", "");
-        receiverMessageFlow.addProperty("ComponentSWCVName", "external");
-        receiverMessageFlow.addProperty("streaming", "false");
-        receiverMessageFlow.addProperty("enableMPLAttachments", "true");
-        receiverMessageFlow.addProperty("pooledConnectionIdleTimeout", "300000");
-        receiverMessageFlow.addProperty("httpAddressQuery", "");
-        receiverMessageFlow.addProperty("httpRequestTimeout", "60000");
-        receiverMessageFlow.addProperty("ComponentSWCVId", "1.20.1");
-        receiverMessageFlow.addProperty("providerName", "");
-        receiverMessageFlow.addProperty("allowedRequestHeaders", "traceparent");
-        receiverMessageFlow.addProperty("MessageProtocol", "None");
-        receiverMessageFlow.addProperty("direction", "Receiver");
-        receiverMessageFlow.addProperty("ComponentType", "HTTP");
-        receiverMessageFlow.addProperty("httpShouldSendBody", "false");
-        receiverMessageFlow.addProperty("throwExceptionOnFailure", "true");
-        receiverMessageFlow.addProperty("proxyType", "default");
-        receiverMessageFlow.addProperty("componentVersion", "1.20");
-        receiverMessageFlow.addProperty("retryIteration", "1");
-        receiverMessageFlow.addProperty("proxyHost", "");
-        receiverMessageFlow.addProperty("providerUrl", "");
-        receiverMessageFlow.addProperty("retryOnConnectionFailure", "false");
-        receiverMessageFlow.addProperty("system", "Receiver");
-        receiverMessageFlow.addProperty("authenticationMethod", "Client Certificate");
-        receiverMessageFlow.addProperty("locationID", "");
-        receiverMessageFlow.addProperty("retryInterval", "5");
-        receiverMessageFlow.addProperty("TransportProtocol", "HTTP");
-        receiverMessageFlow.addProperty("cmdVariantUri", "ctype::AdapterVariant/cname::sap:HTTP/tp::HTTP/mp::None/direction::Receiver/version::1.20.1");
-        receiverMessageFlow.addProperty("httpErrorResponseCodes", "");
-        receiverMessageFlow.addProperty("credentialName", "");
-        receiverMessageFlow.addProperty("apiDisplayName", "");
-        receiverMessageFlow.addProperty("MessageProtocolVersion", "1.20.1");
-        receiverMessageFlow.addProperty("providerRelativeUrl", "");
-        receiverMessageFlow.addProperty("httpAddressWithoutQuery", "");
+
+        if (receiver) {
+            // Use custom receiver configuration
+            const receiverProps = receiver.properties;
+            Object.keys(receiverProps).forEach(key => {
+                receiverMessageFlow.addProperty(key, receiverProps[key]);
+            });
+            // Add cmdVariantUri if adapter has the method
+            if ('getCmdVariantUri' in receiver && typeof receiver.getCmdVariantUri === 'function') {
+                receiverMessageFlow.addProperty("cmdVariantUri", receiver.getCmdVariantUri());
+            }
+            receiverMessageFlow.addProperty("direction", "Receiver");
+        } else {
+            // Default HTTP receiver configuration
+            receiverMessageFlow.addProperty("apiName", "");
+            receiverMessageFlow.addProperty("Description", "");
+            receiverMessageFlow.addProperty("methodSourceExpression", "");
+            receiverMessageFlow.addProperty("apiArtifactType", "");
+            receiverMessageFlow.addProperty("providerAuth", "");
+            receiverMessageFlow.addProperty("retryOnExceptionsTable", "");
+            receiverMessageFlow.addProperty("ComponentNS", "sap");
+            receiverMessageFlow.addProperty("privateKeyAlias", "");
+            receiverMessageFlow.addProperty("httpMethod", "POST");
+            receiverMessageFlow.addProperty("apiprovider_location_id", "");
+            receiverMessageFlow.addProperty("allowedResponseHeaders", "*");
+            receiverMessageFlow.addProperty("Name", "HTTP");
+            receiverMessageFlow.addProperty("internetProxyType", "");
+            receiverMessageFlow.addProperty("TransportProtocolVersion", "1.20.1");
+            receiverMessageFlow.addProperty("retryOnException", "false");
+            receiverMessageFlow.addProperty("proxyPort", "");
+            receiverMessageFlow.addProperty("ComponentSWCVName", "external");
+            receiverMessageFlow.addProperty("streaming", "false");
+            receiverMessageFlow.addProperty("enableMPLAttachments", "true");
+            receiverMessageFlow.addProperty("pooledConnectionIdleTimeout", "300000");
+            receiverMessageFlow.addProperty("httpAddressQuery", "");
+            receiverMessageFlow.addProperty("httpRequestTimeout", "60000");
+            receiverMessageFlow.addProperty("ComponentSWCVId", "1.20.1");
+            receiverMessageFlow.addProperty("providerName", "");
+            receiverMessageFlow.addProperty("allowedRequestHeaders", "traceparent");
+            receiverMessageFlow.addProperty("MessageProtocol", "None");
+            receiverMessageFlow.addProperty("direction", "Receiver");
+            receiverMessageFlow.addProperty("ComponentType", "HTTP");
+            receiverMessageFlow.addProperty("httpShouldSendBody", "false");
+            receiverMessageFlow.addProperty("throwExceptionOnFailure", "true");
+            receiverMessageFlow.addProperty("proxyType", "default");
+            receiverMessageFlow.addProperty("componentVersion", "1.20");
+            receiverMessageFlow.addProperty("retryIteration", "1");
+            receiverMessageFlow.addProperty("proxyHost", "");
+            receiverMessageFlow.addProperty("providerUrl", "");
+            receiverMessageFlow.addProperty("retryOnConnectionFailure", "false");
+            receiverMessageFlow.addProperty("system", "Receiver");
+            receiverMessageFlow.addProperty("authenticationMethod", "Client Certificate");
+            receiverMessageFlow.addProperty("locationID", "");
+            receiverMessageFlow.addProperty("retryInterval", "5");
+            receiverMessageFlow.addProperty("TransportProtocol", "HTTP");
+            receiverMessageFlow.addProperty("cmdVariantUri", "ctype::AdapterVariant/cname::sap:HTTP/tp::HTTP/mp::None/direction::Receiver/version::1.20.1");
+            receiverMessageFlow.addProperty("httpErrorResponseCodes", "");
+            receiverMessageFlow.addProperty("credentialName", "");
+            receiverMessageFlow.addProperty("apiDisplayName", "");
+            receiverMessageFlow.addProperty("MessageProtocolVersion", "1.20.1");
+            receiverMessageFlow.addProperty("providerRelativeUrl", "");
+            receiverMessageFlow.addProperty("httpAddressWithoutQuery", "");
+        }
         collaboration.addMessageFlow(receiverMessageFlow);
 
         // Create BPMN Diagram with visual layout
@@ -301,21 +405,51 @@ export class BpmnProcessMapper {
         });
 
         // Add shapes for process elements
+        // For Router flows, position CallActivities vertically to avoid overlap
+        let callActivityIndex = 0;
+        const callActivityCount = process.nodes.filter(n => n.type === "callActivity").length;
+
         process.nodes.forEach(node => {
             if (node.type === "startEvent") {
                 diagram.addShape(new BpmnShape(node.id, node.id, 292, 142, 32, 32));
             } else if (node.type === "endEvent") {
                 diagram.addShape(new BpmnShape(node.id, node.id, 703, 142, 32, 32));
             } else if (node.type === "callActivity") {
-                diagram.addShape(new BpmnShape(node.id, node.id, 412, 132, 100, 60));
+                // Position CallActivities vertically for Router flows
+                // Base position: (412, 132)
+                // Vertical spacing: 80 pixels between components
+                const baseY = 100;
+                const spacing = 80;
+                const y = baseY + (callActivityIndex * spacing);
+
+                diagram.addShape(new BpmnShape(node.id, node.id, 412, y, 100, 60));
+                callActivityIndex++;
             } else if (node.type === "exclusiveGateway") {
                 // Gateway shape - diamond (40x40)
-                // Evidence: SAP BPMN uses diamond shapes for gateways
-                diagram.addShape(new BpmnShape(node.id, node.id, 350, 138, 40, 40));
+                // Position gateway vertically centered relative to its routes
+                const centerY = 100 + ((callActivityCount - 1) * 80 / 2) + 30;
+                diagram.addShape(new BpmnShape(node.id, node.id, 350, centerY, 40, 40));
+            } else if (node.type === "parallelGateway") {
+                // Parallel Gateway shape - diamond (40x40)
+                // Position similar to exclusive gateway
+                const centerY = 100 + ((callActivityCount - 1) * 80 / 2) + 30;
+                diagram.addShape(new BpmnShape(node.id, node.id, 350, centerY, 40, 40));
             }
         });
 
         // Add edges for sequence flows
+        // Build a map of node positions for waypoint calculation
+        const nodePositions = new Map<string, {x: number, y: number}>();
+        process.nodes.forEach(node => {
+            const shape = diagram.shapes.find(s => s.bpmnElement === node.id);
+            if (shape) {
+                // Calculate center point of the shape
+                const centerX = shape.x + (shape.width / 2);
+                const centerY = shape.y + (shape.height / 2);
+                nodePositions.set(node.id, {x: centerX, y: centerY});
+            }
+        });
+
         process.flows.forEach(flow => {
             const edge = new BpmnEdge(
                 flow.id,
@@ -324,15 +458,16 @@ export class BpmnProcessMapper {
                 `BPMNShape_${flow.targetRef}`
             );
 
-            // Calculate waypoints based on source and target positions
-            if (flow.sourceRef === "StartEvent_2" && flow.targetRef === "CallActivity_1") {
-                edge.addWaypoint(308, 160);
-                edge.addWaypoint(462, 160);
-            } else if (flow.sourceRef === "CallActivity_1" && flow.targetRef === "EndEvent_2") {
-                edge.addWaypoint(462, 160);
-                edge.addWaypoint(719, 160);
+            // Get source and target positions
+            const sourcePos = nodePositions.get(flow.sourceRef);
+            const targetPos = nodePositions.get(flow.targetRef);
+
+            if (sourcePos && targetPos) {
+                // Add waypoints from source center to target center
+                edge.addWaypoint(sourcePos.x, sourcePos.y);
+                edge.addWaypoint(targetPos.x, targetPos.y);
             } else {
-                // Generic waypoint calculation for other flows
+                // Fallback to generic waypoints
                 edge.addWaypoint(400, 160);
                 edge.addWaypoint(500, 160);
             }
