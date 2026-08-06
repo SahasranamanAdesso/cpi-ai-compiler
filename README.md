@@ -64,6 +64,12 @@ Model → Registry → Mapper → IR → Writers → Serializer → Packager →
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed explanation.
 
+### Processing Component Family
+
+The compiler uses a metadata-driven approach for CallActivity-based components (Content Modifier, Router, Groovy Script, etc.). This eliminates code duplication and makes adding new components trivial—just add Registry metadata, no code changes required.
+
+See [Processing Components](docs/architecture/processing-components.md) for details.
+
 ---
 
 ## Installation

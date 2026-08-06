@@ -17,6 +17,28 @@
 export { IFlow } from './model/IFlow';
 export { Component } from './model/Component';
 export { Connection } from './model/Connection';
+export { Resource } from './model/Resource';
+export { Router, Route } from './model/Router';
+export { GroovyScript } from './model/GroovyScript';
+export { GroovyResource } from './model/GroovyResource';
+export { DataStore } from './model/DataStore';
+export { Multicast } from './model/Multicast';
+export { Splitter } from './model/Splitter';
+export { Gather } from './model/Gather';
+export { MessageMapping } from './model/MessageMapping';
+export { MappingResource } from './model/MappingResource';
+export { XsdResource } from './model/XsdResource';
+export { XmlValidator } from './model/XmlValidator';
+export { XsltMapping } from './model/XsltMapping';
+export { XsltResource } from './model/XsltResource';
+export { ProcessCall } from './model/ProcessCall';
+export { LocalIntegrationProcess } from './model/LocalIntegrationProcess';
+export { ExceptionSubprocess } from './model/ExceptionSubprocess';
+export { HttpAdapter } from './model/HttpAdapter';
+export { ODataAdapter } from './model/ODataAdapter';
+export { SftpAdapter } from './model/SftpAdapter';
+export { SoapAdapter } from './model/SoapAdapter';
+export { IdocAdapter } from './model/IdocAdapter';
 
 // ============================================================================
 // PUBLIC API - Mapper Layer
@@ -42,6 +64,7 @@ export { BpmnNode } from './ir/BpmnNode';
 export { BpmnParticipant } from './ir/BpmnParticipant';
 export { BpmnMessageFlow } from './ir/BpmnMessageFlow';
 export { BpmnSequenceFlow } from './ir/BpmnSequenceFlow';
+export { BpmnSubProcess } from './ir/BpmnSubProcess';
 export { BpmnDiagram } from './ir/BpmnDiagram';
 export { BpmnShape } from './ir/BpmnShape';
 export { BpmnEdge } from './ir/BpmnEdge';

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAP AI Integration Compiler - Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>SAP AI Integration Compiler</h1>
+            <p class="subtitle">Natural Language → SAP Integration Suite</p>
+        </header>
+
+        <!-- Prompt Section -->
+        <section class="prompt-section">
+            <label for="prompt">Describe your Integration Flow</label>
+            <textarea
+                id="prompt"
+                rows="6"
+                placeholder="Example: Create an Integration Flow that receives an HTTP request, sets the body to &quot;Hello from AI&quot;, and sends it to an HTTPS receiver."
+            ></textarea>
+            <button id="generateBtn" class="primary-button">Generate Integration Flow</button>
+        </section>
+
+        <!-- Progress Section -->
+        <section id="progressSection" class="progress-section hidden">
+            <h2>Execution Progress</h2>
+            <div class="progress-steps">
+                <div class="progress-step" id="step-ai">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Calling AI Provider</div>
+                </div>
+                <div class="progress-step" id="step-typescript">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Generating TypeScript</div>
+                </div>
+                <div class="progress-step" id="step-validate">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Validating Code</div>
+                </div>
+                <div class="progress-step" id="step-compile">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Compiling to BPMN</div>
+                </div>
+                <div class="progress-step" id="step-package">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Packaging Project</div>
+                </div>
+                <div class="progress-step" id="step-complete">
+                    <div class="step-icon">□</div>
+                    <div class="step-text">Complete</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Error Section -->
+        <section id="errorSection" class="error-section hidden">
+            <h2>Generation Failed</h2>
+            <div id="errorContent" class="error-content"></div>
+        </section>
+
+        <!-- Result Section -->
+        <section id="resultSection" class="result-section hidden">
+            <h2>Result</h2>
+
+            <!-- Metadata -->
+            <div class="metadata">
+                <div class="metadata-item">
+                    <span class="label">Flow Name:</span>
+                    <span id="flowName"></span>
+                </div>
+                <div class="metadata-item">
+                    <span class="label">Execution Time:</span>
+                    <span id="executionTime"></span>
+                </div>
+                <div class="metadata-item">
+                    <span class="label">AI Provider:</span>
+                    <span id="provider"></span>
+                </div>
+                <div class="metadata-item">
+                    <span class="label">Model:</span>
+                    <span id="model"></span>
+                </div>
+                <div class="metadata-item">
+                    <span class="label">Tokens:</span>
+                    <span id="tokens"></span>
+                </div>
+            </div>
+
+            <!-- Generated Code (Collapsible) -->
+            <div class="collapsible-section">
+                <button class="collapsible-toggle" id="codeToggle">
+                    <span class="toggle-icon">▶</span> Generated TypeScript
+                </button>
+                <div class="collapsible-content hidden" id="codeContent">
+                    <pre><code id="generatedCode"></code></pre>
+                </div>
+            </div>
+
+            <!-- Download Section -->
+            <div class="download-section">
+                <h3>Generated ZIP</h3>
+                <p>Your SAP Integration Suite project is ready to import.</p>
+                <button id="downloadBtn" class="primary-button download-button">
+                    Download ZIP
+                </button>
+            </div>
+
+            <!-- Import Instructions -->
+            <div class="instructions">
+                <h3>Import to SAP Integration Suite</h3>
+                <ol>
+                    <li>Open SAP Integration Suite</li>
+                    <li>Navigate to <strong>Design → Integrations</strong></li>
+                    <li>Click <strong>Import</strong></li>
+                    <li>Upload the generated ZIP file</li>
+                    <li>Open in graphical editor ✅</li>
+                </ol>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -7,6 +7,22 @@
   "scripts": {
     "build": "tsc",
     "helloworld": "ts-node examples/helloworld.ts",
+    "groovy": "ts-node examples/groovy-script.ts",
+    "router": "ts-node examples/router.ts",
+    "datastore": "ts-node examples/datastore.ts",
+    "multicast": "ts-node examples/multicast.ts",
+    "splitter": "ts-node examples/splitter.ts",
+    "gather": "ts-node examples/gather.ts",
+    "mapping": "ts-node examples/message-mapping.ts",
+    "minimal": "ts-node examples/minimal-demo.ts",
+    "ai-demo": "ts-node examples/ai-generation.ts",
+    "e2e-demo": "ts-node examples/end-to-end.ts",
+    "consumer": "ts-node examples/consumer-example.ts",
+    "test-compiler": "ts-node test-compiler-package.ts",
+    "all-components": "ts-node all-components-demo.ts",
+    "comprehensive": "ts-node comprehensive-flow-demo.ts",
+    "order-demo": "ts-node examples/order-processing-package.ts",
+    "demo": "ts-node demo/server.ts",
     "clean": "rimraf dist",
     "prepublish": "npm run build"
   },
@@ -28,16 +44,18 @@
   "bugs": {
     "url": "https://github.com/SahasranamanAdesso/cpi-ai_compiler/issues"
   },
-  "author": "Sahasranaman Adesso",
+  "author": {
+    "name": "Sahasranaman",
+    "url": "https://github.com/SahasranamanAdesso"
+  },
   "license": "MIT",
   "dependencies": {
-    "@types/archiver": "^8.0.0",
-    "archiver": "^8.0.0",
-    "fast-xml-parser": "^4.5.0",
-    "jszip": "^3.10.1",
-    "xmlbuilder2": "^3.1.1"
+    "@cpi-ai/compiler": "file:./packages/compiler",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"

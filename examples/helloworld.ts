@@ -1,11 +1,5 @@
-import { IFlow } from "../src/model/IFlow";
-import { Component } from "../src/model/Component";
-import { BpmnProcessMapper } from "../src/mapper/BpmnProcessMapper";
-import { IflowSerializer } from "../src/serializer/IflowSerializer";
-import { IflowPackager } from "../src/packager/IflowPackager";
-import * as path from 'path';
+import { IFlow, Component, compileToZip } from "@cpi-ai/compiler";
 import * as fs from 'fs';
-import * as os from 'os';
 
 /**
  * HelloWorld Example - Generate first importable CPI Integration Flow
@@ -24,67 +18,31 @@ async function generateHelloWorld() {
     const contentModifier = new Component(
         "CallActivity_1",
         "Set Body",
-        "Enricher"
+        "Enricher",
+        {
+            // User properties (defaults come from Registry metadata)
+            body: "Hello from SAP Integration Suite!"
+        }
     );
-    // Add Content Modifier configuration
-    contentModifier.properties.activityType = "Enricher";
-    contentModifier.properties.bodyType = "constant";
-    contentModifier.properties.body = "Hello from SAP Integration Suite!";
 
     flow.addComponent(contentModifier);
 
     console.log("✅ Domain model created");
 
-    // 2. Map to IR (BpmnDefinitions)
-    const mapper = new BpmnProcessMapper();
-    const definitions = mapper.map(flow);
+    // 2. Compile to ZIP using the compiler package API
+    const zipBuffer = await compileToZip(flow);
 
-    console.log("✅ Mapped to BPMN IR");
+    // 3. Save to file
+    const outputZip = 'HelloWorld.zip';
+    fs.writeFileSync(outputZip, zipBuffer);
 
-    // 3. Add Content Modifier properties
-    const contentModifierNode = definitions.process.nodes.find(
-        n => n.id === "CallActivity_1"
-    );
-    if (contentModifierNode) {
-        contentModifierNode.addProperty("activityType", "Enricher");
-        contentModifierNode.addProperty("bodyType", "constant");
-        contentModifierNode.addProperty("body", "Hello from SAP Integration Suite!");
-    }
-
-    // 4. Serialize to .iflw file
-    const tempDir = path.join(os.tmpdir(), 'HelloWorld');
-
-    // Clean temp directory if exists
-    if (fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-
-    const serializer = new IflowSerializer();
-    serializer.serialize(definitions, tempDir, "HelloWorld");
-
-    console.log("✅ Serialized to .iflw");
-
-    // 5. Package to ZIP
-    const outputZip = path.join(process.cwd(), 'HelloWorld.zip');
-
-    // Remove existing ZIP
-    if (fs.existsSync(outputZip)) {
-        fs.unlinkSync(outputZip);
-    }
-
-    const packager = new IflowPackager();
-    await packager.package(tempDir, "HelloWorld", outputZip);
-
-    console.log(`\n🎉 SUCCESS! Generated ${outputZip}`);
+    console.log(`\n🎉 SUCCESS! Generated ${outputZip} (${zipBuffer.length} bytes)`);
     console.log(`\nNext steps:`);
     console.log(`1. Open SAP Integration Suite`);
     console.log(`2. Navigate to Design → Integrations`);
     console.log(`3. Click Import`);
     console.log(`4. Upload HelloWorld.zip`);
     console.log(`5. Deploy and test!`);
-
-    // Clean up temp directory
-    fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 generateHelloWorld().catch(err => {

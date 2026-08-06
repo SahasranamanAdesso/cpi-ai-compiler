@@ -1,0 +1,58 @@
+{
+  "name": "@cpi-ai/compiler",
+  "version": "1.0.0",
+  "description": "TypeScript compiler for SAP Cloud Integration (CPI) Integration Flows - AI-powered npm package",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "sap",
+    "cpi",
+    "integration",
+    "iflow",
+    "bpmn",
+    "compiler",
+    "typescript",
+    "ai",
+    "sap-integration-suite",
+    "cloud-integration",
+    "code-generation",
+    "integration-flow"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SahasranamanAdesso/cpi-ai-compiler.git",
+    "directory": "packages/compiler"
+  },
+  "homepage": "https://github.com/SahasranamanAdesso/cpi-ai-compiler#readme",
+  "bugs": {
+    "url": "https://github.com/SahasranamanAdesso/cpi-ai-compiler/issues"
+  },
+  "author": {
+    "name": "Sahasranaman",
+    "url": "https://github.com/SahasranamanAdesso"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "xmlbuilder2": "^3.1.1"
+  },
+  "devDependencies": {
+    "@types/archiver": "^8.0.0",
+    "@types/node": "^22.10.5",
+    "rimraf": "^3.0.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
