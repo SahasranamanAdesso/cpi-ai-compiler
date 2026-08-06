@@ -1,0 +1,170 @@
+/**
+ * Public API - Validation functions
+ *
+ * Validate IFlow models before compilation
+ */
+
+import { IFlow } from '../model/IFlow';
+import { Router } from '../model/Router';
+
+/**
+ * Validation error severity
+ */
+export type ValidationSeverity = 'error' | 'warning';
+
+/**
+ * Validation error details
+ */
+export interface ValidationError {
+    severity: ValidationSeverity;
+    code: string;
+    message: string;
+    component?: string;
+}
+
+/**
+ * Validation result
+ */
+export interface ValidationResult {
+    valid: boolean;
+    errors: ValidationError[];
+    warnings: ValidationError[];
+}
+
+/**
+ * Validate an IFlow model
+ *
+ * Checks structural integrity and SAP requirements before compilation.
+ *
+ * @param flow - IFlow model instance
+ * @returns Validation result with errors and warnings
+ *
+ * @example
+ * ```typescript
+ * const flow = new IFlow("Test");
+ * const result = validate(flow);
+ *
+ * if (!result.valid) {
+ *     console.error("Validation errors:", result.errors);
+ *     return;
+ * }
+ *
+ * const zip = await compileToZip(flow);
+ * ```
+ */
+export function validate(flow: IFlow): ValidationResult {
+    const errors: ValidationError[] = [];
+    const warnings: ValidationError[] = [];
+
+    // FL-001: Flow must have name
+    if (!flow.name || flow.name.trim().length === 0) {
+        errors.push({
+            severity: 'error',
+            code: 'FL-002',
+            message: 'IFlow name is required'
+        });
+    }
+
+    // FL-003: Exactly one sender
+    const sender = flow.getSender();
+    if (!sender) {
+        errors.push({
+            severity: 'error',
+            code: 'FL-003',
+            message: 'Flow must have exactly one sender adapter'
+        });
+    }
+
+    // FL-004: At least one receiver
+    const receiver = flow.getReceiver();
+    if (!receiver) {
+        errors.push({
+            severity: 'error',
+            code: 'FL-004',
+            message: 'Flow must have at least one receiver adapter'
+        });
+    }
+
+    // Component validation
+    const components = flow.getComponents();
+    const componentIds = new Set<string>();
+
+    components.forEach(component => {
+        // CP-001: Unique component IDs
+        if (componentIds.has(component.id)) {
+            errors.push({
+                severity: 'error',
+                code: 'CP-001',
+                message: `Duplicate component ID: ${component.id}`,
+                component: component.id
+            });
+        }
+        componentIds.add(component.id);
+
+        // CP-003: Component name required
+        if (!component.name || component.name.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'CP-003',
+                message: 'Component name is required',
+                component: component.id
+            });
+        }
+
+        // RT-002: Router must have at least 2 routes
+        if (component instanceof Router) {
+            const routes = component.getAllRoutes();
+            if (routes.length < 2) {
+                errors.push({
+                    severity: 'error',
+                    code: 'RT-002',
+                    message: 'Router must have at least 2 routes (1 conditional + 1 default)',
+                    component: component.id
+                });
+            }
+
+            // RT-003: Router connections must match routes
+            const connections = flow.getConnections();
+            const routerConnections = connections.filter(c => c.from.id === component.id);
+            if (routerConnections.length !== routes.length) {
+                errors.push({
+                    severity: 'error',
+                    code: 'RT-003',
+                    message: `Router has ${routes.length} routes but ${routerConnections.length} connections`,
+                    component: component.id
+                });
+            }
+        }
+    });
+
+    // Resource validation
+    const resources = flow.getResources();
+    const resourceNames = new Set(resources.map(r => r.name));
+
+    // Check for orphaned components (not connected)
+    if (components.length > 0) {
+        const connections = flow.getConnections();
+        const connectedIds = new Set<string>();
+        connections.forEach(c => {
+            connectedIds.add(c.from.id);
+            connectedIds.add(c.to.id);
+        });
+
+        components.forEach(component => {
+            if (!connectedIds.has(component.id)) {
+                warnings.push({
+                    severity: 'warning',
+                    code: 'CN-003',
+                    message: 'Component is not connected to flow',
+                    component: component.id
+                });
+            }
+        });
+    }
+
+    return {
+        valid: errors.length === 0,
+        errors,
+        warnings
+    };
+}

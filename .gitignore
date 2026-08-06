@@ -31,6 +31,11 @@ coverage/
 .env
 .env.local
 
+# Internal/company-specific files (not for public release)
+ADESSO_AI_HUB_SETUP.md
+QUICK_START.md
+demo/
+
 # Samples output
 samples/*.iflw
 samples/*.zip

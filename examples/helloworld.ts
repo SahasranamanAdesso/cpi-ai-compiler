@@ -1,11 +1,5 @@
-import { IFlow } from "../src/model/IFlow";
-import { Component } from "../src/model/Component";
-import { BpmnProcessMapper } from "../src/mapper/BpmnProcessMapper";
-import { IflowSerializer } from "../src/serializer/IflowSerializer";
-import { IflowPackager } from "../src/packager/IflowPackager";
-import * as path from 'path';
+import { IFlow, Component, compileToZip } from "@cpi-ai/compiler";
 import * as fs from 'fs';
-import * as os from 'os';
 
 /**
  * HelloWorld Example - Generate first importable CPI Integration Flow
@@ -35,47 +29,20 @@ async function generateHelloWorld() {
 
     console.log("✅ Domain model created");
 
-    // 2. Map to IR (BpmnDefinitions)
-    const mapper = new BpmnProcessMapper();
-    const definitions = mapper.map(flow);
+    // 2. Compile to ZIP using the compiler package API
+    const zipBuffer = await compileToZip(flow);
 
-    console.log("✅ Mapped to BPMN IR");
+    // 3. Save to file
+    const outputZip = 'HelloWorld.zip';
+    fs.writeFileSync(outputZip, zipBuffer);
 
-    // 3. Serialize to .iflw file
-    // Note: Properties are now automatically injected by ComponentMapper from Registry metadata
-    const tempDir = path.join(os.tmpdir(), 'HelloWorld');
-
-    // Clean temp directory if exists
-    if (fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-
-    const serializer = new IflowSerializer();
-    serializer.serialize(definitions, tempDir, "HelloWorld");
-
-    console.log("✅ Serialized to .iflw");
-
-    // 4. Package to ZIP
-    const outputZip = path.join(process.cwd(), 'HelloWorld.zip');
-
-    // Remove existing ZIP
-    if (fs.existsSync(outputZip)) {
-        fs.unlinkSync(outputZip);
-    }
-
-    const packager = new IflowPackager();
-    await packager.package(tempDir, "HelloWorld", outputZip);
-
-    console.log(`\n🎉 SUCCESS! Generated ${outputZip}`);
+    console.log(`\n🎉 SUCCESS! Generated ${outputZip} (${zipBuffer.length} bytes)`);
     console.log(`\nNext steps:`);
     console.log(`1. Open SAP Integration Suite`);
     console.log(`2. Navigate to Design → Integrations`);
     console.log(`3. Click Import`);
     console.log(`4. Upload HelloWorld.zip`);
     console.log(`5. Deploy and test!`);
-
-    // Clean up temp directory
-    fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 generateHelloWorld().catch(err => {
