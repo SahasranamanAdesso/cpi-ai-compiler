@@ -1,11 +1,17 @@
 {
-  "name": "sap-integration-sdk",
+  "name": "@cpi-ai/compiler",
   "version": "1.0.0",
-  "description": "TypeScript SDK for building SAP Cloud Integration (CPI) Integration Flows programmatically",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "TypeScript compiler for SAP Cloud Integration (CPI) Integration Flows - AI-powered npm package",
+  "main": "packages/compiler/dist/index.js",
+  "types": "packages/compiler/dist/index.d.ts",
+  "files": [
+    "packages/compiler/dist",
+    "packages/compiler/README.md",
+    "packages/compiler/LICENSE"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "cd packages/compiler && npm run build",
+    "prepare": "cd packages/compiler && npm install && npm run build",
     "helloworld": "ts-node examples/helloworld.ts",
     "groovy": "ts-node examples/groovy-script.ts",
     "router": "ts-node examples/router.ts",
@@ -50,14 +56,20 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@cpi-ai/compiler": "file:./packages/compiler",
+    "archiver": "^8.0.0",
+    "xmlbuilder2": "^3.1.1",
     "dotenv": "^16.6.1",
     "express": "^4.18.2"
   },
   "devDependencies": {
+    "@types/archiver": "^8.0.0",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
+    "rimraf": "^3.0.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
