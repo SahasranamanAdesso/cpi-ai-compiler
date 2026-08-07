@@ -6,8 +6,12 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "packages/compiler",
-    "scripts",
+    "packages/compiler/src",
+    "packages/compiler/tsconfig.json",
+    "packages/compiler/package.json",
+    "packages/compiler/README.md",
+    "packages/compiler/LICENSE",
+    "scripts/prepare-github.js",
     "README.md",
     "LICENSE"
   ],

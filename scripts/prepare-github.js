@@ -52,29 +52,5 @@ for (const file of filesToCopy) {
   }
 }
 
-// Clean up unnecessary files to reduce package size
-// Remove packages/ and scripts/ as they're only needed for build
-const packagesDir = path.join(rootDir, 'packages');
-const scriptsDir = path.join(rootDir, 'scripts');
-
-function removeDir(dir) {
-  if (fs.existsSync(dir)) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        removeDir(fullPath);
-      } else {
-        fs.unlinkSync(fullPath);
-      }
-    }
-    fs.rmdirSync(dir);
-  }
-}
-
-console.log('  Cleaning up build artifacts...');
-removeDir(packagesDir);
-removeDir(scriptsDir);
-
 console.log('✅ Package layout prepared');
 console.log('   Final structure: dist/, package.json, README.md, LICENSE');
