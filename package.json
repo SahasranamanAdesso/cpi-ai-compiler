@@ -6,6 +6,8 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "packages/compiler",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
