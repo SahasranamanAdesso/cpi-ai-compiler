@@ -2,16 +2,16 @@
   "name": "@cpi-ai/compiler",
   "version": "1.0.0",
   "description": "TypeScript compiler for SAP Cloud Integration (CPI) Integration Flows - AI-powered npm package",
-  "main": "packages/compiler/dist/index.js",
-  "types": "packages/compiler/dist/index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "files": [
-    "packages/compiler/dist",
-    "packages/compiler/README.md",
-    "packages/compiler/LICENSE"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "cd packages/compiler && npm run build",
-    "prepare": "cd packages/compiler && npm install && npm run build",
+    "prepare": "cd packages/compiler && npm install && npm run build && cd ../.. && node scripts/prepare-github.js",
     "helloworld": "ts-node examples/helloworld.ts",
     "groovy": "ts-node examples/groovy-script.ts",
     "router": "ts-node examples/router.ts",

@@ -8,6 +8,7 @@ build/
 *.js
 *.d.ts
 !jest.config.js
+!scripts/**/*.js
 
 # IDE
 .vscode/
