@@ -4,16 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Only run if being installed from GitHub (not during local development)
-// Check if we're in node_modules (GitHub install) or local repo
-const isGithubInstall = __dirname.includes('node_modules');
-
-if (!isGithubInstall) {
-  console.log('📦 Skipping GitHub prepare (local development mode)');
-  process.exit(0);
-}
-
-console.log('📦 Preparing package for GitHub installation...');
+console.log('📦 Preparing package layout...');
 
 const rootDir = path.join(__dirname, '..');
 const sourceDir = path.join(rootDir, 'packages', 'compiler');
@@ -61,5 +52,5 @@ for (const file of filesToCopy) {
   }
 }
 
-console.log('✅ Package prepared successfully for GitHub installation');
-console.log('   Layout: dist/, package.json, README.md, LICENSE');
+console.log('✅ Package layout prepared');
+console.log('   Root structure: dist/, package.json, README.md, LICENSE');
