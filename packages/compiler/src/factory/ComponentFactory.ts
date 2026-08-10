@@ -111,7 +111,7 @@ export type AdapterDirection = 'Sender' | 'Receiver';
  * Component configuration (generic key-value properties)
  */
 export interface ComponentConfig {
-    name: string;
+    name?: string;  // Optional - will be auto-generated if not provided
     [key: string]: any;
 }
 
@@ -222,18 +222,21 @@ export interface IFlowJson {
 export function createComponent(type: ComponentType, config: ComponentConfig, id?: string): Component {
     const { name, ...properties } = config;
 
+    // Generate default name if not provided
+    const componentName = name || `${type} ${id || IdGenerator.next('Comp')}`;
+
     switch (type) {
         case 'ContentModifier':
             // Map to Enricher registry key
             return new Component(
                 id || IdGenerator.next('Enricher'),
-                name,
+                componentName,
                 'Enricher',
                 properties
             );
 
         case 'Router':
-            const router = new Router(name, properties);
+            const router = new Router(componentName, properties);
             // Apply routes if provided
             if (config.routes && Array.isArray(config.routes)) {
                 for (const route of config.routes) {
@@ -258,7 +261,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             if (!config.scriptName) {
                 throw new Error('GroovyScript requires scriptName property');
             }
-            return new GroovyScript(name, config.scriptName, properties);
+            return new GroovyScript(componentName, config.scriptName, properties);
 
         case 'DataStore':
             const operation = config.operation || 'put';
@@ -271,28 +274,28 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
 
             switch (operation) {
                 case 'put':
-                    return DataStore.Write(name, storageName, entryId, {
+                    return DataStore.Write(componentName, storageName, entryId, {
                         visibility: config.visibility,
                         encrypt: config.encrypt,
                         expire: config.expire
                     });
                 case 'get':
-                    return DataStore.Get(name, storageName, entryId);
+                    return DataStore.Get(componentName, storageName, entryId);
                 case 'delete':
-                    return DataStore.Delete(name, storageName, entryId);
+                    return DataStore.Delete(componentName, storageName, entryId);
                 default:
                     throw new Error(`Unsupported DataStore operation: ${operation}`);
             }
 
         case 'Multicast':
-            return new Multicast(name);
+            return new Multicast(componentName);
 
         case 'Splitter':
             if (!config.expression) {
                 throw new Error('Splitter requires expression property');
             }
             return new Splitter(
-                name,
+                componentName,
                 config.expression,
                 {
                     exprType: config.expressionType || 'XPath',
@@ -304,7 +307,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
 
         case 'Gather':
             return new Gather(
-                name,
+                componentName,
                 config.aggregationAlgorithm || 'sap-identical-multi-mapping',
                 {
                     messageType: config.messageType,
@@ -317,14 +320,14 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             if (!config.mappingName) {
                 throw new Error('MessageMapping requires mappingName property');
             }
-            return new MessageMapping(name, config.mappingName, properties);
+            return new MessageMapping(componentName, config.mappingName, properties);
 
         case 'XmlValidator':
             if (!config.xsd) {
                 throw new Error('XmlValidator requires xsd property');
             }
             return new XmlValidator(
-                name,
+                componentName,
                 config.xsd,
                 config.preventException !== undefined ? config.preventException : false,
                 properties
@@ -335,7 +338,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 throw new Error('XsltMapping requires mappingName property');
             }
             return new XsltMapping(
-                name,
+                componentName,
                 config.mappingName,
                 config.outputFormat || 'Bytes',
                 properties
@@ -346,7 +349,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 throw new Error('ProcessCall requires processId property');
             }
             return new ProcessCall(
-                name,
+                componentName,
                 config.processId,
                 config.looping !== undefined ? config.looping : false,
                 properties
