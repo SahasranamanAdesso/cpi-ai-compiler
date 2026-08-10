@@ -127,10 +127,21 @@ export function validate(flow: IFlow): ValidationResult {
             const connections = flow.getConnections();
             const routerConnections = connections.filter(c => c.from.id === component.id);
             if (routerConnections.length !== routes.length) {
+                // Build helpful error message showing which targets need connections
+                const routeTargets = routes.map(r => r.target).filter((t): t is string => t !== undefined);
+                const connectedTargets = routerConnections.map(c => c.to.id);
+                const missingTargets = routeTargets.filter(t => !connectedTargets.includes(t));
+
+                let message = `Router has ${routes.length} routes but ${routerConnections.length} connections. `;
+                if (missingTargets.length > 0) {
+                    message += `Missing connections from router "${component.id}" to targets: ${missingTargets.join(', ')}. `;
+                }
+                message += `Add to connections array: ${routeTargets.map(t => `{"from": "${component.id}", "to": "${t}"}`).join(', ')}`;
+
                 errors.push({
                     severity: 'error',
                     code: 'RT-003',
-                    message: `Router has ${routes.length} routes but ${routerConnections.length} connections`,
+                    message,
                     component: component.id
                 });
             }
