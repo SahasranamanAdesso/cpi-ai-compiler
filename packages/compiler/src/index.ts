@@ -29,9 +29,13 @@
 export { compile, compileToZip } from './api/compile';
 export { validate } from './api/validate';
 export { supportedComponents } from './api/components';
+export { getCapabilities } from './api/capabilities';
 
 // Export validation types
 export type { ValidationResult, ValidationError, ValidationSeverity } from './api/validate';
+
+// Export capabilities types
+export type { Capabilities, ComponentCapability, AdapterCapability } from './api/capabilities';
 
 // ============================================================================
 // EXTENDED API - Model Layer (for building flows)
