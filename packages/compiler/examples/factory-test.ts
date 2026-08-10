@@ -485,6 +485,101 @@ async function testUrlNormalization() {
 }
 
 /**
+ * Test 7: ContentModifier Regression Test
+ */
+async function testContentModifierRegression() {
+    console.log('\n=== Test 7: ContentModifier Regression Test ===');
+
+    // Exact JSON from the issue report
+    const json = {
+        name: "OrderFlow",
+        sender: {
+            type: "HTTPS" as const,
+            config: {
+                address: "/api/orders"
+            }
+        },
+        components: [
+            {
+                id: "modifier1",
+                type: "ContentModifier" as const,
+                config: {
+                    name: "Set Country Header",
+                    header: "Country",
+                    value: "IN"
+                }
+            }
+        ],
+        receiver: {
+            type: "HTTP" as const,
+            config: {
+                url: "https://example.com/orders"
+            }
+        },
+        connections: [
+            { from: "sender", to: "modifier1" },
+            { from: "modifier1", to: "receiver" }
+        ]
+    };
+
+    const flow = fromJson(json);
+
+    // Verify component count
+    const components = flow.getComponents();
+    if (components.length !== 1) {
+        throw new Error(`Expected 1 component, got ${components.length}`);
+    }
+
+    // Verify component ID is preserved
+    const component = components[0];
+    if (component.id !== 'modifier1') {
+        throw new Error(`Expected component ID 'modifier1', got '${component.id}'`);
+    }
+
+    // Verify component name
+    if (component.name !== 'Set Country Header') {
+        throw new Error(`Expected name 'Set Country Header', got '${component.name}'`);
+    }
+
+    // Verify component type
+    if (component.componentType !== 'Enricher') {
+        throw new Error(`Expected type 'Enricher', got '${component.componentType}'`);
+    }
+
+    // Verify no unexpected components
+    const allComponentIds = components.map(c => c.id);
+    if (allComponentIds.includes('Enricher_1')) {
+        throw new Error('Unexpected auto-generated component ID Enricher_1 found!');
+    }
+
+    // Verify validation
+    const result = validate(flow);
+    if (!result.valid) {
+        throw new Error(`Validation failed: ${JSON.stringify(result.errors)}`);
+    }
+
+    // Verify no CP-003 errors (missing component name)
+    const cp003Errors = result.errors.filter((e: any) => e.code === 'CP-003');
+    if (cp003Errors.length > 0) {
+        throw new Error(`CP-003 error found: ${JSON.stringify(cp003Errors)}`);
+    }
+
+    console.log('✓ Component count: 1 (correct)');
+    console.log('✓ Component ID: modifier1 (AI-provided ID preserved)');
+    console.log('✓ Component name: Set Country Header (correct)');
+    console.log('✓ Component type: Enricher (correct mapping)');
+    console.log('✓ No unexpected Enricher_1 component');
+    console.log('✓ Validation: PASSED');
+    console.log('✓ No CP-003 errors');
+
+    // Compile to verify full pipeline works
+    const zipBuffer = await compileToZip(flow);
+    console.log(`✓ Compiled to ZIP: ${zipBuffer.length} bytes`);
+
+    console.log('\n✅ ContentModifier regression test passed!');
+}
+
+/**
  * Run all tests
  */
 async function runTests() {
@@ -500,6 +595,7 @@ async function runTests() {
         await testComplexFlow();
         await testSenderReceiverConnections();
         await testUrlNormalization();
+        await testContentModifierRegression();
 
         console.log('\n╔════════════════════════════════════════════════╗');
         console.log('║  ✅ ALL TESTS PASSED                           ║');

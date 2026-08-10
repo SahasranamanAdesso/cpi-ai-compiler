@@ -185,6 +185,7 @@ export interface IFlowJson {
  *
  * @param type - Component type (ContentModifier, Router, GroovyScript, etc.)
  * @param config - Component configuration with name and type-specific properties
+ * @param id - Optional component ID (if not provided, auto-generated)
  * @returns Component instance
  * @throws Error if type is unsupported
  *
@@ -210,16 +211,22 @@ export interface IFlowJson {
  *     name: 'Transform',
  *     scriptName: 'transform.groovy'
  * });
+ *
+ * // With custom ID
+ * const cmWithId = createComponent('ContentModifier', {
+ *     name: 'Set Headers',
+ *     headers: { Country: 'IN' }
+ * }, 'modifier1');
  * ```
  */
-export function createComponent(type: ComponentType, config: ComponentConfig): Component {
+export function createComponent(type: ComponentType, config: ComponentConfig, id?: string): Component {
     const { name, ...properties } = config;
 
     switch (type) {
         case 'ContentModifier':
             // Map to Enricher registry key
             return new Component(
-                IdGenerator.next('Enricher'),
+                id || IdGenerator.next('Enricher'),
                 name,
                 'Enricher',
                 properties
@@ -603,13 +610,12 @@ export function fromJson(json: IFlowJson): IFlow {
     // Add components
     if (json.components) {
         for (const compDef of json.components) {
-            const component = createComponent(compDef.type, compDef.config);
+            const component = createComponent(compDef.type, compDef.config, compDef.id);
             flow.addComponent(component);
 
             // Store mapping from AI ID to actual component
-            if (compDef.id) {
-                componentMap.set(compDef.id, component);
-            }
+            // Use component.id as the key (which is either the provided id or auto-generated)
+            componentMap.set(compDef.id || component.id, component);
         }
     }
 
@@ -647,12 +653,10 @@ export function fromJson(json: IFlowJson): IFlow {
             // Add subprocess components
             if (subDef.components) {
                 for (const compDef of subDef.components) {
-                    const component = createComponent(compDef.type, compDef.config);
+                    const component = createComponent(compDef.type, compDef.config, compDef.id);
                     subprocess.addComponent(component);
 
-                    if (compDef.id) {
-                        componentMap.set(compDef.id, component);
-                    }
+                    componentMap.set(compDef.id || component.id, component);
                 }
             }
 
@@ -680,12 +684,10 @@ export function fromJson(json: IFlowJson): IFlow {
             // Add exception subprocess components
             if (exDef.components) {
                 for (const compDef of exDef.components) {
-                    const component = createComponent(compDef.type, compDef.config);
+                    const component = createComponent(compDef.type, compDef.config, compDef.id);
                     exSubprocess.addComponent(component);
 
-                    if (compDef.id) {
-                        componentMap.set(compDef.id, component);
-                    }
+                    componentMap.set(compDef.id || component.id, component);
                 }
             }
 
