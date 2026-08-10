@@ -30,6 +30,9 @@ export interface ComponentCapability {
 
     /** Example configuration */
     example?: Record<string, any>;
+
+    /** Special requirements and validation rules */
+    notes?: string;
 }
 
 /**
@@ -73,7 +76,7 @@ export interface Capabilities {
  * Component-specific configuration requirements
  * Derived from ComponentFactory validation logic
  */
-const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; optional: Record<string, string>; example?: Record<string, any> }> = {
+const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; optional: Record<string, string>; example?: Record<string, any>; notes?: string }> = {
     'ContentModifier': {
         required: [],
         optional: {
@@ -91,15 +94,18 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         required: [],
         optional: {
             'name': 'Display name for the component',
-            'routes': 'Array of routing conditions and targets',
-            'defaultRoute': 'Default route when no condition matches'
+            'routes': 'Array of routing conditions and targets - each route must have {condition, target}',
+            'defaultRoute': 'Default route when no condition matches - must have {target}'
         },
         example: {
             name: 'Route by Type',
             routes: [
-                { condition: "${header.type} == 'A'", target: 'componentA' }
-            ]
-        }
+                { condition: "${header.type} == 'A'", target: 'componentA' },
+                { condition: "${header.type} == 'B'", target: 'componentB' }
+            ],
+            defaultRoute: { target: 'defaultComponent' }
+        },
+        notes: 'CRITICAL: Router requires BOTH routes configuration AND corresponding connections. For each route (including defaultRoute), you MUST add a connection from the router ID to the route target. Validation error RT-003 occurs when the number of connections does not match the number of routes. Minimum 2 routes required (at least 1 conditional route + 1 default route).'
     },
     'GroovyScript': {
         required: ['scriptName'],
@@ -423,7 +429,8 @@ export function getCapabilities(): Capabilities {
             displayName: definition.displayName,
             requiredProperties: requirements.required,
             optionalProperties: requirements.optional,
-            example: requirements.example
+            example: requirements.example,
+            notes: requirements.notes
         });
     }
 
