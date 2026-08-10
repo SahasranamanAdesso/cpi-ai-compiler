@@ -724,10 +724,13 @@ export function fromJson(json: IFlowJson): IFlow {
                 continue;
             }
 
-            // Skip sender → component and component → receiver
-            // These are implicit in the IFlow model (entry/exit points)
-            // The validation logic recognizes flows with sender/receiver
-            if (conn.from === 'sender' || conn.to === 'receiver') {
+            // Skip sender → component and component → receiver ONLY if they are
+            // implicit flow endpoints (not actual components with those IDs)
+            // Check componentMap to distinguish between:
+            // - "sender"/"receiver" as flow adapters (implicit) → skip
+            // - "sender"/"receiver" as component IDs (explicit) → process normally
+            if ((conn.from === 'sender' && !componentMap.has('sender')) ||
+                (conn.to === 'receiver' && !componentMap.has('receiver'))) {
                 continue;
             }
 
