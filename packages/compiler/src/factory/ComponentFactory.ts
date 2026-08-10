@@ -45,6 +45,7 @@ import { IdGenerator } from '../utils/IdGenerator';
 /**
  * Normalizes Markdown URLs to plain URLs
  * Converts [https://example.com](https://example.com) → https://example.com
+ * Also handles escaped variants
  */
 function normalizeUrl(value: any): any {
     if (typeof value !== 'string') {
@@ -52,7 +53,8 @@ function normalizeUrl(value: any): any {
     }
 
     // Match Markdown URL pattern: [url](url)
-    const markdownUrlPattern = /^\[([^\]]+)\]\(\1\)$/;
+    // Also handles escaped characters like \[ \] \(  \)
+    const markdownUrlPattern = /^\\?\[([^\]]+)\\?\]\\?\(\\?(\1)\\?\)$/;
     const match = value.match(markdownUrlPattern);
 
     if (match) {
@@ -227,12 +229,23 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
 
     switch (type) {
         case 'ContentModifier':
+            // Transform headers array to headerTable format if needed
+            const enricherProps = { ...properties };
+            if (config.headers && Array.isArray(config.headers)) {
+                // Convert headers array to headerTable XML format
+                const headerEntries = config.headers.map((h: any) =>
+                    `<row><cell>${h.name}</cell><cell>${h.value || ''}</cell><cell/></row>`
+                ).join('');
+                enricherProps.headerTable = `<table>${headerEntries}</table>`;
+                delete enricherProps.headers;
+            }
+
             // Map to Enricher registry key
             return new Component(
                 id || IdGenerator.next('Enricher'),
                 componentName,
                 'Enricher',
-                properties
+                enricherProps
             );
 
         case 'Router':
