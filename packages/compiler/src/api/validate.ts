@@ -126,13 +126,35 @@ export function validate(flow: IFlow): ValidationResult {
             // RT-003: Router connections must match routes
             const connections = flow.getConnections();
             const routerConnections = connections.filter(c => c.from.id === component.id);
-            if (routerConnections.length !== routes.length) {
-                // Build helpful error message showing which targets need connections
-                const routeTargets = routes.map(r => r.target).filter((t): t is string => t !== undefined);
+
+            // A route needs an explicit connection UNLESS it targets a flow adapter endpoint
+            // that doesn't have a corresponding component. We detect this by:
+            // 1. If route.target is in routerConnections, it needs a connection (component exists)
+            // 2. If route.target is NOT in routerConnections AND target is "sender"/"receiver",
+            //    it's an implicit adapter endpoint (no connection needed)
+
+            const connectedTargetIds = new Set(routerConnections.map(c => c.to.id));
+
+            // Count routes that need explicit connections:
+            // - Routes with connections (to components)
+            // - Routes without connections but NOT to sender/receiver (missing connections - error)
+            // Exclude routes to sender/receiver that have NO connections (implicit adapters)
+            const routesNeedingConnections = routes.filter(r => {
+                if (!r.target) return false;
+                // If we have a connection to this target, it's a component that needed one
+                if (connectedTargetIds.has(r.target)) return true;
+                // If no connection exists, only exclude if it's sender/receiver (implicit)
+                // Otherwise it's a missing connection to a component
+                return r.target !== 'sender' && r.target !== 'receiver';
+            });
+
+            if (routerConnections.length !== routesNeedingConnections.length) {
+                // Build helpful error message
+                const routeTargets = routesNeedingConnections.map(r => r.target).filter((t): t is string => t !== undefined);
                 const connectedTargets = routerConnections.map(c => c.to.id);
                 const missingTargets = routeTargets.filter(t => !connectedTargets.includes(t));
 
-                let message = `Router has ${routes.length} routes but ${routerConnections.length} connections. `;
+                let message = `Router has ${routesNeedingConnections.length} routes but ${routerConnections.length} connections. `;
                 if (missingTargets.length > 0) {
                     message += `Missing connections from router "${component.id}" to targets: ${missingTargets.join(', ')}. `;
                 }
