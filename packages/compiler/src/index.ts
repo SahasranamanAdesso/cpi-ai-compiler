@@ -115,3 +115,22 @@ export { IflowPackager } from './packager/IflowPackager';
  */
 export { Registry } from './registry/Registry';
 export { ComponentRegistry } from './registry/ComponentRegistry';
+
+// ============================================================================
+// PUBLIC API - Factory Layer (new in Step 11)
+// ============================================================================
+
+/**
+ * Generic factory functions for creating components from AI JSON
+ */
+export { createComponent, createAdapter, fromJson } from './factory/ComponentFactory';
+export type {
+    ComponentType,
+    AdapterType,
+    AdapterDirection,
+    ComponentConfig,
+    AdapterConfig,
+    ResourceConfig,
+    ConnectionConfig,
+    IFlowJson
+} from './factory/ComponentFactory';
