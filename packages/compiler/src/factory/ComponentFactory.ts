@@ -43,6 +43,39 @@ import { ComponentRegistry } from '../registry/ComponentRegistry';
 import { IdGenerator } from '../utils/IdGenerator';
 
 /**
+ * Normalizes Markdown URLs to plain URLs
+ * Converts [https://example.com](https://example.com) → https://example.com
+ */
+function normalizeUrl(value: any): any {
+    if (typeof value !== 'string') {
+        return value;
+    }
+
+    // Match Markdown URL pattern: [url](url)
+    const markdownUrlPattern = /^\[([^\]]+)\]\(\1\)$/;
+    const match = value.match(markdownUrlPattern);
+
+    if (match) {
+        return match[1]; // Return the URL without Markdown formatting
+    }
+
+    return value;
+}
+
+/**
+ * Normalizes all string values in a config object
+ */
+function normalizeConfig(config: Record<string, any>): Record<string, any> {
+    const normalized: Record<string, any> = {};
+
+    for (const [key, value] of Object.entries(config)) {
+        normalized[key] = normalizeUrl(value);
+    }
+
+    return normalized;
+}
+
+/**
  * Supported component types
  */
 export type ComponentType =
@@ -352,91 +385,94 @@ export function createAdapter(
     direction: AdapterDirection,
     config: AdapterConfig
 ): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter {
+    // Normalize config (convert Markdown URLs to plain URLs)
+    const normalizedConfig = normalizeConfig(config);
+
     switch (type) {
         case 'HTTP':
         case 'HTTPS':
             if (direction === 'Sender') {
                 return HttpAdapter.sender({
-                    name: config.name,
-                    address: config.address || '/',
+                    name: normalizedConfig.name,
+                    address: normalizedConfig.address || '/',
                     protocol: type,
-                    allowedMethods: config.allowedMethods,
-                    authentication: config.authentication,
-                    userRole: config.userRole,
-                    maximumBodySize: config.maximumBodySize
+                    allowedMethods: normalizedConfig.allowedMethods,
+                    authentication: normalizedConfig.authentication,
+                    userRole: normalizedConfig.userRole,
+                    maximumBodySize: normalizedConfig.maximumBodySize
                 });
             } else {
                 return HttpAdapter.receiver({
-                    name: config.name,
-                    url: config.url,
-                    method: config.method,
+                    name: normalizedConfig.name,
+                    url: normalizedConfig.url,
+                    method: normalizedConfig.method,
                     protocol: type,
-                    authentication: config.authentication,
-                    credentialName: config.credentialName,
-                    timeout: config.timeout,
-                    allowedResponseHeaders: config.allowedResponseHeaders
+                    authentication: normalizedConfig.authentication,
+                    credentialName: normalizedConfig.credentialName,
+                    timeout: normalizedConfig.timeout,
+                    allowedResponseHeaders: normalizedConfig.allowedResponseHeaders
                 });
             }
 
         case 'OData':
             if (direction === 'Sender') {
                 return ODataAdapter.sender({
-                    name: config.name || 'OData Sender',
-                    resourcePath: config.resourcePath || '',
-                    version: config.version,
-                    pollingInterval: config.pollingInterval,
-                    authentication: config.authentication,
-                    credentialName: config.credentialName,
-                    filter: config.filter,
-                    select: config.select
+                    name: normalizedConfig.name || 'OData Sender',
+                    resourcePath: normalizedConfig.resourcePath || '',
+                    version: normalizedConfig.version,
+                    pollingInterval: normalizedConfig.pollingInterval,
+                    authentication: normalizedConfig.authentication,
+                    credentialName: normalizedConfig.credentialName,
+                    filter: normalizedConfig.filter,
+                    select: normalizedConfig.select
                 });
             } else {
                 return ODataAdapter.receiver({
-                    name: config.name || 'OData Receiver',
-                    resourcePath: config.resourcePath || '',
-                    operation: config.operation || 'Query',
-                    address: config.address,
-                    version: config.version,
-                    authentication: config.authentication,
-                    credentialName: config.credentialName,
-                    timeout: config.timeout,
-                    filter: config.filter,
-                    select: config.select,
-                    expand: config.expand,
-                    top: config.top,
-                    skip: config.skip
+                    name: normalizedConfig.name || 'OData Receiver',
+                    resourcePath: normalizedConfig.resourcePath || '',
+                    operation: normalizedConfig.operation || 'Query',
+                    address: normalizedConfig.address,
+                    version: normalizedConfig.version,
+                    authentication: normalizedConfig.authentication,
+                    credentialName: normalizedConfig.credentialName,
+                    timeout: normalizedConfig.timeout,
+                    filter: normalizedConfig.filter,
+                    select: normalizedConfig.select,
+                    expand: normalizedConfig.expand,
+                    top: normalizedConfig.top,
+                    skip: normalizedConfig.skip
                 });
             }
 
         case 'SFTP':
             if (direction === 'Sender') {
                 return SftpAdapter.sender({
-                    name: config.name,
-                    directory: config.directory || '/',
-                    filePattern: config.filePattern,
-                    host: config.host || '',
-                    port: config.port,
-                    credentialName: config.credentialName || '',
-                    authentication: config.authentication,
-                    privateKeyAlias: config.privateKeyAlias,
-                    pollingInterval: config.pollingInterval,
-                    maxMessagesPerPoll: config.maxMessagesPerPoll,
-                    postProcessing: config.postProcessing,
-                    archiveDirectory: config.archiveDirectory,
-                    sorting: config.sorting
+                    name: normalizedConfig.name,
+                    directory: normalizedConfig.directory || '/',
+                    filePattern: normalizedConfig.filePattern,
+                    host: normalizedConfig.host || '',
+                    port: normalizedConfig.port,
+                    credentialName: normalizedConfig.credentialName || '',
+                    authentication: normalizedConfig.authentication,
+                    privateKeyAlias: normalizedConfig.privateKeyAlias,
+                    pollingInterval: normalizedConfig.pollingInterval,
+                    maxMessagesPerPoll: normalizedConfig.maxMessagesPerPoll,
+                    postProcessing: normalizedConfig.postProcessing,
+                    archiveDirectory: normalizedConfig.archiveDirectory,
+                    sorting: normalizedConfig.sorting
                 });
             } else {
                 return SftpAdapter.receiver({
-                    name: config.name,
-                    directory: config.directory || '/',
-                    fileName: config.fileName || '',
-                    host: config.host || '',
-                    port: config.port,
-                    credentialName: config.credentialName || '',
-                    authentication: config.authentication,
-                    privateKeyAlias: config.privateKeyAlias,
-                    fileExists: config.fileExists,
-                    createDirectory: config.createDirectory
+                    name: normalizedConfig.name,
+                    directory: normalizedConfig.directory || '/',
+                    fileName: normalizedConfig.fileName || '',
+                    host: normalizedConfig.host || '',
+                    port: normalizedConfig.port,
+                    credentialName: normalizedConfig.credentialName || '',
+                    authentication: normalizedConfig.authentication,
+                    privateKeyAlias: normalizedConfig.privateKeyAlias,
+                    fileExists: normalizedConfig.fileExists,
+                    createDirectory: normalizedConfig.createDirectory
                 });
             }
 
@@ -444,45 +480,45 @@ export function createAdapter(
             if (direction === 'Sender') {
                 // SOAP Sender not commonly used, create basic adapter
                 return new SoapAdapter(
-                    config.name || 'SOAP Sender',
+                    normalizedConfig.name || 'SOAP Sender',
                     'Sender',
                     {
-                        address: config.address || '/',
-                        ...config
+                        address: normalizedConfig.address || '/',
+                        ...normalizedConfig
                     }
                 );
             } else {
                 return SoapAdapter.receiver({
-                    name: config.name || 'SOAP Receiver',
-                    url: config.url,
-                    soapAction: config.soapAction,
-                    soapVersion: config.soapVersion,
-                    authentication: config.authentication,
-                    credentialName: config.credentialName,
-                    timeout: config.timeout,
-                    wsSecurity: config.wsSecurity,
-                    privateKeyAlias: config.privateKeyAlias,
-                    proxyType: config.proxyType,
-                    locationId: config.locationId
+                    name: normalizedConfig.name || 'SOAP Receiver',
+                    url: normalizedConfig.url,
+                    soapAction: normalizedConfig.soapAction,
+                    soapVersion: normalizedConfig.soapVersion,
+                    authentication: normalizedConfig.authentication,
+                    credentialName: normalizedConfig.credentialName,
+                    timeout: normalizedConfig.timeout,
+                    wsSecurity: normalizedConfig.wsSecurity,
+                    privateKeyAlias: normalizedConfig.privateKeyAlias,
+                    proxyType: normalizedConfig.proxyType,
+                    locationId: normalizedConfig.locationId
                 });
             }
 
         case 'IDoc':
             if (direction === 'Sender') {
                 return IdocAdapter.sender({
-                    name: config.name || 'IDoc Sender',
-                    address: config.address || '',
-                    credentialName: config.credentialName || ''
+                    name: normalizedConfig.name || 'IDoc Sender',
+                    address: normalizedConfig.address || '',
+                    credentialName: normalizedConfig.credentialName || ''
                 });
             } else {
                 return IdocAdapter.receiver({
-                    name: config.name || 'IDoc Receiver',
-                    address: config.address || '',
-                    credentialName: config.credentialName || '',
-                    locationId: config.locationId,
-                    sapMessageIdDetermination: config.sapMessageIdDetermination,
-                    timeout: config.timeout,
-                    compressMessage: config.compressMessage
+                    name: normalizedConfig.name || 'IDoc Receiver',
+                    address: normalizedConfig.address || '',
+                    credentialName: normalizedConfig.credentialName || '',
+                    locationId: normalizedConfig.locationId,
+                    sapMessageIdDetermination: normalizedConfig.sapMessageIdDetermination,
+                    timeout: normalizedConfig.timeout,
+                    compressMessage: normalizedConfig.compressMessage
                 });
             }
 
@@ -676,6 +712,15 @@ export function fromJson(json: IFlowJson): IFlow {
             if (conn.from === 'StartEvent' || conn.to === 'EndEvent') {
                 // These connections are implicit in IFlow model
                 // They will be created by the mapper/compiler
+                continue;
+            }
+
+            // Resolve "sender" to first component (sender adapters don't participate in connect())
+            // Resolve "receiver" to last component (receiver adapters don't participate in connect())
+            // Skip connections involving sender/receiver as they are implicit
+            if (conn.from === 'sender' || conn.to === 'receiver') {
+                // Sender → component and component → receiver connections are implicit
+                // The compiler will create them automatically
                 continue;
             }
 

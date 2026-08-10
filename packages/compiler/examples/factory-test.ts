@@ -331,6 +331,160 @@ async function testComplexFlow() {
 }
 
 /**
+ * Test 5: Sender/Receiver Connections
+ */
+async function testSenderReceiverConnections() {
+    console.log('\n=== Test 5: Sender/Receiver Connections ===');
+
+    // Test 5a: sender → component
+    const json1 = {
+        name: 'Sender to Component',
+        sender: {
+            type: 'HTTPS' as const,
+            config: { address: '/api/test' }
+        },
+        components: [
+            {
+                id: 'cm1',
+                type: 'ContentModifier' as const,
+                config: { name: 'Set Header' }
+            }
+        ],
+        receiver: {
+            type: 'HTTP' as const,
+            config: { url: 'https://example.com' }
+        },
+        connections: [
+            { from: 'sender', to: 'cm1' }
+        ]
+    };
+
+    const flow1 = fromJson(json1);
+    console.log('✓ sender → component:', flow1.getComponents().length, 'components');
+
+    // Test 5b: component → receiver
+    const json2 = {
+        name: 'Component to Receiver',
+        sender: {
+            type: 'HTTPS' as const,
+            config: { address: '/api/test' }
+        },
+        components: [
+            {
+                id: 'cm1',
+                type: 'ContentModifier' as const,
+                config: { name: 'Set Header' }
+            }
+        ],
+        receiver: {
+            type: 'HTTP' as const,
+            config: { url: 'https://example.com' }
+        },
+        connections: [
+            { from: 'cm1', to: 'receiver' }
+        ]
+    };
+
+    const flow2 = fromJson(json2);
+    console.log('✓ component → receiver:', flow2.getComponents().length, 'components');
+
+    // Test 5c: sender → component → receiver
+    const json3 = {
+        name: 'Full Chain',
+        sender: {
+            type: 'HTTPS' as const,
+            config: { address: '/api/test' }
+        },
+        components: [
+            {
+                id: 'cm1',
+                type: 'ContentModifier' as const,
+                config: { name: 'Set Header' }
+            }
+        ],
+        receiver: {
+            type: 'HTTP' as const,
+            config: { url: 'https://example.com' }
+        },
+        connections: [
+            { from: 'sender', to: 'cm1' },
+            { from: 'cm1', to: 'receiver' }
+        ]
+    };
+
+    const flow3 = fromJson(json3);
+    console.log('✓ sender → component → receiver:', flow3.getComponents().length, 'components');
+
+    // Test 5d: component → component (normal connection)
+    const json4 = {
+        name: 'Component to Component',
+        sender: {
+            type: 'HTTPS' as const,
+            config: { address: '/api/test' }
+        },
+        components: [
+            {
+                id: 'cm1',
+                type: 'ContentModifier' as const,
+                config: { name: 'Step 1' }
+            },
+            {
+                id: 'cm2',
+                type: 'ContentModifier' as const,
+                config: { name: 'Step 2' }
+            }
+        ],
+        receiver: {
+            type: 'HTTP' as const,
+            config: { url: 'https://example.com' }
+        },
+        connections: [
+            { from: 'cm1', to: 'cm2' }
+        ]
+    };
+
+    const flow4 = fromJson(json4);
+    console.log('✓ component → component:', flow4.getConnections().length, 'connections');
+
+    console.log('\n✅ All sender/receiver connection tests passed!');
+}
+
+/**
+ * Test 6: URL Normalization
+ */
+async function testUrlNormalization() {
+    console.log('\n=== Test 6: URL Normalization ===');
+
+    // Test 6a: Plain URL (no change)
+    const plainUrl = createAdapter('HTTP', 'Receiver', {
+        url: 'https://api.example.com/orders'
+    });
+    console.log('✓ Plain URL:', plainUrl.properties.staticUrl);
+
+    // Test 6b: Markdown URL (normalized)
+    const markdownUrl = createAdapter('HTTP', 'Receiver', {
+        url: '[https://api.example.com/orders](https://api.example.com/orders)'
+    });
+    console.log('✓ Markdown URL normalized:', markdownUrl.properties.staticUrl);
+
+    if (markdownUrl.properties.staticUrl !== 'https://api.example.com/orders') {
+        throw new Error('Markdown URL normalization failed!');
+    }
+
+    // Test 6c: Markdown URL in SOAP
+    const soapMarkdownUrl = createAdapter('SOAP', 'Receiver', {
+        url: '[https://soap.example.com/service](https://soap.example.com/service)'
+    });
+    console.log('✓ SOAP Markdown URL normalized:', soapMarkdownUrl.properties.url);
+
+    if (soapMarkdownUrl.properties.url !== 'https://soap.example.com/service') {
+        throw new Error('SOAP Markdown URL normalization failed!');
+    }
+
+    console.log('\n✅ All URL normalization tests passed!');
+}
+
+/**
  * Run all tests
  */
 async function runTests() {
@@ -344,6 +498,8 @@ async function runTests() {
         testAdapterFactory();
         await testFromJson();
         await testComplexFlow();
+        await testSenderReceiverConnections();
+        await testUrlNormalization();
 
         console.log('\n╔════════════════════════════════════════════════╗');
         console.log('║  ✅ ALL TESTS PASSED                           ║');
