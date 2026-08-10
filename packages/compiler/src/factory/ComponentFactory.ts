@@ -720,12 +720,10 @@ export function fromJson(json: IFlowJson): IFlow {
                 continue;
             }
 
-            // Resolve "sender" to first component (sender adapters don't participate in connect())
-            // Resolve "receiver" to last component (receiver adapters don't participate in connect())
-            // Skip connections involving sender/receiver as they are implicit
+            // Skip sender → component and component → receiver
+            // These are implicit in the IFlow model (entry/exit points)
+            // The validation logic recognizes flows with sender/receiver
             if (conn.from === 'sender' || conn.to === 'receiver') {
-                // Sender → component and component → receiver connections are implicit
-                // The compiler will create them automatically
                 continue;
             }
 

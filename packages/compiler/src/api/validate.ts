@@ -150,8 +150,20 @@ export function validate(flow: IFlow): ValidationResult {
             connectedIds.add(c.to.id);
         });
 
+        // For flows with sender/receiver but no explicit connections,
+        // all components are implicitly connected through the flow entry/exit points
+        const hasSender = !!flow.getSender();
+        const hasReceiver = !!flow.getReceiver();
+        const hasExplicitConnections = connections.length > 0;
+
         components.forEach(component => {
-            if (!connectedIds.has(component.id)) {
+            // A component is connected if:
+            // 1. It appears in explicit connections, OR
+            // 2. It's in a flow with sender/receiver (implicit connection)
+            const isExplicitlyConnected = connectedIds.has(component.id);
+            const isImplicitlyConnected = hasSender && hasReceiver && !hasExplicitConnections;
+
+            if (!isExplicitlyConnected && !isImplicitlyConnected) {
                 warnings.push({
                     severity: 'warning',
                     code: 'CN-003',

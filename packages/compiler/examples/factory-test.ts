@@ -580,6 +580,112 @@ async function testContentModifierRegression() {
 }
 
 /**
+ * Test 8: Sender/Receiver Endpoint Validation
+ */
+async function testSenderReceiverValidation() {
+    console.log('\n=== Test 8: Sender/Receiver Endpoint Validation ===');
+
+    // Test 8a: Single component flow (sender → component → receiver)
+    const singleComponentFlow = {
+        name: "Single Component Flow",
+        sender: {
+            type: "HTTPS" as const,
+            config: { address: "/api/input" }
+        },
+        components: [
+            {
+                id: "transform",
+                type: "GroovyScript" as const,
+                config: {
+                    name: "Transform Data",
+                    scriptName: "transform.groovy"
+                }
+            }
+        ],
+        receiver: {
+            type: "HTTP" as const,
+            config: { url: "https://api.example.com/output" }
+        },
+        connections: [
+            { from: "sender", to: "transform" },
+            { from: "transform", to: "receiver" }
+        ],
+        resources: [
+            { type: "groovy" as const, name: "transform.groovy", content: "def Message processData(Message message) { return message; }" }
+        ]
+    };
+
+    const flow1 = fromJson(singleComponentFlow);
+    const result1 = validate(flow1);
+    if (!result1.valid || result1.warnings.some((w: any) => w.code === 'CN-003')) {
+        throw new Error('Single component flow validation failed!');
+    }
+    console.log('✓ Single component flow: No CN-003 warnings');
+
+    // Test 8b: Multiple components with explicit connections
+    const multiComponentFlow = {
+        name: "Multi Component Flow",
+        sender: {
+            type: "HTTPS" as const,
+            config: { address: "/api/input" }
+        },
+        components: [
+            {
+                id: "cm1",
+                type: "ContentModifier" as const,
+                config: { name: "Step 1" }
+            },
+            {
+                id: "cm2",
+                type: "ContentModifier" as const,
+                config: { name: "Step 2" }
+            }
+        ],
+        receiver: {
+            type: "HTTP" as const,
+            config: { url: "https://api.example.com/output" }
+        },
+        connections: [
+            { from: "sender", to: "cm1" },
+            { from: "cm1", to: "cm2" },
+            { from: "cm2", to: "receiver" }
+        ]
+    };
+
+    const flow2 = fromJson(multiComponentFlow);
+    const result2 = validate(flow2);
+    if (!result2.valid || result2.warnings.some((w: any) => w.code === 'CN-003')) {
+        throw new Error('Multi component flow validation failed!');
+    }
+    console.log('✓ Multiple components: No CN-003 warnings');
+
+    // Test 8c: Direct sender → receiver (no components)
+    const directFlow = {
+        name: "Direct Flow",
+        sender: {
+            type: "HTTPS" as const,
+            config: { address: "/api/passthrough" }
+        },
+        receiver: {
+            type: "HTTP" as const,
+            config: { url: "https://api.example.com/output" }
+        },
+        connections: [
+            { from: "sender", to: "receiver" }
+        ]
+    };
+
+    const flow3 = fromJson(directFlow);
+    const result3 = validate(flow3);
+    if (!result3.valid) {
+        throw new Error('Direct flow validation failed!');
+    }
+    console.log('✓ Direct sender → receiver: Valid');
+
+    console.log('\n✅ All sender/receiver validation tests passed!');
+}
+
+/**
  * Run all tests
  */
 async function runTests() {
@@ -596,6 +702,7 @@ async function runTests() {
         await testSenderReceiverConnections();
         await testUrlNormalization();
         await testContentModifierRegression();
+        await testSenderReceiverValidation();
 
         console.log('\n╔════════════════════════════════════════════════╗');
         console.log('║  ✅ ALL TESTS PASSED                           ║');
