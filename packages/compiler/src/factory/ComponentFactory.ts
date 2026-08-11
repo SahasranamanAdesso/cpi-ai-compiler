@@ -358,7 +358,8 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 componentName,
                 config.processId,
                 config.looping !== undefined ? config.looping : false,
-                properties
+                properties,
+                id
             );
 
         default:

@@ -48,6 +48,7 @@ export class ProcessCall extends Component {
      * @param looping - If true, creates LoopingProcess (iterates over message splits)
      *                  If false (default), creates NonLoopingProcess (executes once)
      * @param additionalProperties - Optional additional SAP properties
+     * @param id - Optional component ID (auto-generated if not provided)
      *
      * NonLoopingProcess: Executes subprocess once with current message
      * LoopingProcess: Iterates over message splits (after Splitter component)
@@ -56,9 +57,11 @@ export class ProcessCall extends Component {
         name: string,
         processId: string,
         looping: boolean = false,
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        const id = `ProcessCall_${Date.now()}`;
+        // Use provided ID or generate unique ID
+        const componentId = id || `ProcessCall_${Date.now()}`;
 
         const subActivityType = looping ? "LoopingProcess" : "NonLoopingProcess";
 
@@ -67,7 +70,7 @@ export class ProcessCall extends Component {
             ...additionalProperties
         };
 
-        super(id, name, "ProcessCall", properties);
+        super(componentId, name, "ProcessCall", properties);
 
         // Store subActivityType as property (needed for BPMN generation)
         this.properties.subActivityType = subActivityType;
