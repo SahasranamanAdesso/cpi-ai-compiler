@@ -60,6 +60,7 @@ export class GroovyScript extends Component {
      * @param name - Human-readable name for this script step
      * @param scriptName - Filename of the Groovy script (e.g., "transform.groovy")
      * @param additionalProperties - Optional additional SAP properties
+     * @param id - Optional component ID (auto-generated if not provided)
      *
      * @example
      * ```typescript
@@ -80,10 +81,11 @@ export class GroovyScript extends Component {
     constructor(
         name: string,
         scriptName: string,
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        // Generate unique ID for this component
-        const id = `Script_${Date.now()}`;
+        // Use provided ID or generate unique ID
+        const componentId = id || `Script_${Date.now()}`;
 
         // SAP property key is "script" NOT "scriptReference"
         // Evidence: IPRO_PRODUCT_HTTP.iflw line 739
@@ -96,7 +98,7 @@ export class GroovyScript extends Component {
         // Create Component with ScriptCollection type (registry key)
         // Registry metadata will inject: activityType="Script", subActivityType="GroovyScript",
         // cmdVariantUri, componentVersion, scriptFunction, scriptBundleId
-        super(id, name, "ScriptCollection", properties);
+        super(componentId, name, "ScriptCollection", properties);
     }
 
     /**

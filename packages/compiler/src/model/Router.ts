@@ -67,6 +67,7 @@ export class Router extends Component {
      *
      * @param name - Human-readable name for this router
      * @param properties - Optional additional properties
+     * @param id - Optional component ID (auto-generated if not provided)
      *
      * @example
      * ```typescript
@@ -81,14 +82,15 @@ export class Router extends Component {
      */
     constructor(
         name: string,
-        properties: Record<string, any> = {}
+        properties: Record<string, any> = {},
+        id?: string
     ) {
-        // Generate unique ID for this component
-        const id = `Gateway_${Date.now()}`;
+        // Use provided ID or generate unique ID
+        const componentId = id || `Gateway_${Date.now()}`;
 
         // Create Component with Router type
         // Registry maps Router → exclusiveGateway (no metadata needed)
-        super(id, name, "Router", properties);
+        super(componentId, name, "Router", properties);
     }
 
     /**

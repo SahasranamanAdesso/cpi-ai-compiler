@@ -8,6 +8,16 @@ import { IFlow } from '../model/IFlow';
 import { Router } from '../model/Router';
 
 /**
+ * Check if target is a valid flow endpoint (sender/receiver adapter)
+ * that is actually configured in the flow
+ */
+function isFlowEndpoint(flow: IFlow, target: string): boolean {
+    if (target === 'sender' && flow.getSender()) return true;
+    if (target === 'receiver' && flow.getReceiver()) return true;
+    return false;
+}
+
+/**
  * Validation error severity
  */
 export type ValidationSeverity = 'error' | 'warning';
@@ -126,39 +136,43 @@ export function validate(flow: IFlow): ValidationResult {
             // RT-003: Router connections must match routes
             const connections = flow.getConnections();
             const routerConnections = connections.filter(c => c.from.id === component.id);
+            const connectedComponents = new Set(routerConnections.map(c => c.to));
 
-            // A route needs an explicit connection UNLESS it targets a flow adapter endpoint
-            // that doesn't have a corresponding component. We detect this by:
-            // 1. If route.target is in routerConnections, it needs a connection (component exists)
-            // 2. If route.target is NOT in routerConnections AND target is "sender"/"receiver",
-            //    it's an implicit adapter endpoint (no connection needed)
-
-            const connectedTargetIds = new Set(routerConnections.map(c => c.to.id));
-
-            // Count routes that need explicit connections:
-            // - Routes with connections (to components)
-            // - Routes without connections but NOT to sender/receiver (missing connections - error)
-            // Exclude routes to sender/receiver that have NO connections (implicit adapters)
+            // Validate each route target
             const routesNeedingConnections = routes.filter(r => {
                 if (!r.target) return false;
-                // If we have a connection to this target, it's a component that needed one
-                if (connectedTargetIds.has(r.target)) return true;
-                // If no connection exists, only exclude if it's sender/receiver (implicit)
-                // Otherwise it's a missing connection to a component
-                return r.target !== 'sender' && r.target !== 'receiver';
+
+                // 1. Resolve target through canonical component mapping
+                const targetComponent = flow.resolveCanonicalId(r.target);
+
+                if (targetComponent) {
+                    // Case A: Target is a component
+                    // Verify explicit router -> component connection exists
+                    if (connectedComponents.has(targetComponent)) {
+                        return false;  // Already connected
+                    }
+                    return true;  // Missing connection
+                } else if (isFlowEndpoint(flow, r.target)) {
+                    // Case B: Target is a configured flow endpoint (sender/receiver)
+                    // No explicit component connection required
+                    return false;
+                } else {
+                    // Case C: Unknown target
+                    // Will fail during connection building when component not found
+                    // For now, treat as not needing validation in RT-003
+                    return false;
+                }
             });
 
-            if (routerConnections.length !== routesNeedingConnections.length) {
-                // Build helpful error message
-                const routeTargets = routesNeedingConnections.map(r => r.target).filter((t): t is string => t !== undefined);
-                const connectedTargets = routerConnections.map(c => c.to.id);
-                const missingTargets = routeTargets.filter(t => !connectedTargets.includes(t));
+            if (routesNeedingConnections.length > 0) {
+                // Build helpful error message using canonical IDs
+                const missingTargets = routesNeedingConnections
+                    .map(r => r.target)
+                    .filter((t): t is string => t !== undefined);
 
-                let message = `Router has ${routesNeedingConnections.length} routes but ${routerConnections.length} connections. `;
-                if (missingTargets.length > 0) {
-                    message += `Missing connections from router "${component.id}" to targets: ${missingTargets.join(', ')}. `;
-                }
-                message += `Add to connections array: ${routeTargets.map(t => `{"from": "${component.id}", "to": "${t}"}`).join(', ')}`;
+                let message = `Router is missing connections to component targets: ${missingTargets.join(', ')}. `;
+                message += `Add to connections array: ${missingTargets.map(t =>
+                    `{"from": "<router-canonical-id>", "to": "${t}"}`).join(', ')}`;
 
                 errors.push({
                     severity: 'error',

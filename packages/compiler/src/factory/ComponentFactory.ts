@@ -240,7 +240,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             );
 
         case 'Router':
-            const router = new Router(componentName, properties);
+            const router = new Router(componentName, properties, id);
             // Apply routes if provided
             if (config.routes && Array.isArray(config.routes)) {
                 for (const route of config.routes) {
@@ -265,7 +265,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             if (!config.scriptName) {
                 throw new Error('GroovyScript requires scriptName property');
             }
-            return new GroovyScript(componentName, config.scriptName, properties);
+            return new GroovyScript(componentName, config.scriptName, properties, id);
 
         case 'DataStore':
             const operation = config.operation || 'put';
@@ -747,6 +747,9 @@ export function fromJson(json: IFlowJson): IFlow {
             flow.connect(fromComp, toComp);
         }
     }
+
+    // Store canonical ID mapping for validation
+    flow.setCanonicalIdMap(componentMap);
 
     return flow;
 }

@@ -65,6 +65,12 @@ export class IFlow {
     private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
 
     /**
+     * Canonical ID mapping (AI ID → Component)
+     * Used by validation to resolve Router route targets
+     */
+    private canonicalIdMap?: Map<string, Component>;
+
+    /**
      * Creates a new IFlow instance
      * @param name - The name of the integration flow
      */
@@ -206,5 +212,21 @@ export class IFlow {
      */
     public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | undefined {
         return this.receiver;
+    }
+
+    /**
+     * Sets the canonical ID mapping for validation
+     * @internal - Used by ComponentFactory
+     */
+    public setCanonicalIdMap(map: Map<string, Component>): void {
+        this.canonicalIdMap = map;
+    }
+
+    /**
+     * Resolves a canonical AI ID to its Component instance
+     * Returns undefined if ID doesn't exist (flow adapter endpoint)
+     */
+    public resolveCanonicalId(id: string): Component | undefined {
+        return this.canonicalIdMap?.get(id);
     }
 }
