@@ -63,6 +63,7 @@ export async function compile(flow: IFlow): Promise<Buffer> {
 export async function compileToZip(flow: IFlow): Promise<Buffer> {
     const flowName = flow.name;
     const tempDir = path.join(os.tmpdir(), `iflow_${Date.now()}`);
+    let outputZip: string | undefined;
 
     try {
         // 1. Map IFlow to BPMN IR
@@ -75,7 +76,8 @@ export async function compileToZip(flow: IFlow): Promise<Buffer> {
         serializer.serialize(definitions, tempDir, flowName);
 
         // 3. Package to ZIP with resources
-        const outputZip = path.join(tempDir, `${flowName}.zip`);
+        // IMPORTANT: output ZIP must be outside tempDir to avoid nested ZIP
+        outputZip = path.join(os.tmpdir(), `iflow_${Date.now()}_${flowName}.zip`);
         const packager = new IflowPackager();
         const resources = flow.getResources();
         await packager.package(tempDir, flowName, outputZip, resources);
@@ -88,6 +90,10 @@ export async function compileToZip(flow: IFlow): Promise<Buffer> {
         // Cleanup temp directory
         if (fs.existsSync(tempDir)) {
             fs.rmSync(tempDir, { recursive: true, force: true });
+        }
+        // Cleanup output ZIP
+        if (outputZip && fs.existsSync(outputZip)) {
+            fs.rmSync(outputZip, { force: true });
         }
     }
 }
