@@ -324,7 +324,9 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             if (!config.mappingName) {
                 throw new Error('MessageMapping requires mappingName property');
             }
-            return new MessageMapping(componentName, config.mappingName, properties);
+            // Filter out mappingName from properties to avoid duplicate in BPMN output
+            const { mappingName: _, ...mappingProps } = properties;
+            return new MessageMapping(componentName, config.mappingName, mappingProps);
 
         case 'XmlValidator':
             if (!config.xsd) {
