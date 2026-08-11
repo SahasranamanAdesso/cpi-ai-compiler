@@ -208,18 +208,8 @@ export class IflowPackager {
             // Create target directory
             fs.mkdirSync(targetDir, { recursive: true });
 
-            // Get resource content
-            let content: string;
-            if (resource.content) {
-                content = resource.content;
-            } else if (resource.filePath) {
-                if (!fs.existsSync(resource.filePath)) {
-                    throw new Error(`Resource file not found: ${resource.filePath}`);
-                }
-                content = fs.readFileSync(resource.filePath, 'utf-8');
-            } else {
-                throw new Error(`Resource must have either content or filePath: ${resource.name}`);
-            }
+            // Get resource content (use getContent() method which handles auto-enhancement)
+            const content = (resource as any).getContent();
 
             // Write resource to target directory
             const targetPath = path.join(targetDir, resource.name);
