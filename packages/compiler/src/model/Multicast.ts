@@ -40,12 +40,16 @@ export class Multicast extends Component {
      * flow.addComponent(warehouseReceiver);
      * flow.connect(multicast, crmReceiver);
      * flow.connect(multicast, warehouseReceiver);
+     *
+     * @param id - Optional component ID (auto-generated if not provided)
      */
-    constructor(name: string) {
-        const id = `Multicast_${Date.now()}`;
+    constructor(name: string, id?: string) {
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `Multicast_${Date.now()}`;
 
         // Multicast uses special component type to signal parallelGateway
-        super(id, name, "Multicast", {});
+        super(componentId, name, "Multicast", {});
     }
 
     /**

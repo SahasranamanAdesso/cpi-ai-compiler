@@ -1,8 +1,32 @@
 import { BpmnCollaboration } from "../ir/BpmnCollaboration";
 import { PropertyWriter } from "./PropertyWriter";
+import { toXmlTechnicalName } from "../utils/XmlName";
 
 /**
  * CollaborationWriter - Writes BPMN <bpmn2:collaboration> element
+ *
+ * This is the single point where every messageFlow's "Channel Name" (SAP's
+ * term for the sender/receiver/adapter identifier shown on the connecting
+ * line) actually gets serialized into the .iflw, regardless of which
+ * adapter class (HttpAdapter, JdbcAdapter, SoapAdapter, ...) or mapper code
+ * produced the BpmnMessageFlow. Upstream adapter classes already sanitize
+ * their own channel name at construction time, but that only protects
+ * callers who go through those classes -- a hand-built IFlow, a future
+ * adapter, or a mapper-level default (e.g. the literal "HTTPS"/"HTTP"
+ * fallback used when no sender/receiver is configured) could still reach
+ * this writer with an unsanitized value. Running every messageFlow name
+ * through the same toXmlTechnicalName() utility here, one time, at the
+ * point of serialization, guarantees the "no whitespace / valid XML
+ * NCName" invariant holds for the final .iflw no matter how the value got
+ * here -- instead of depending on every current and future call site to
+ * remember to sanitize before constructing a BpmnMessageFlow.
+ *
+ * Participant names are NOT run through this: real SAP exports show the
+ * "Integration Process" participant with a space in its name (evidence:
+ * every reference .iflw captured in this repo), so participant `name` is
+ * not XML-NCName-constrained the way messageFlow `name` is -- sanitizing
+ * it would be an unrequested, unevidenced behavior change to a field SAP
+ * already accepts as free text.
  */
 export class CollaborationWriter {
 
@@ -45,9 +69,12 @@ export class CollaborationWriter {
 
         // Message flows
         collaboration.messageFlows.forEach(messageFlow => {
+            // Final safety-net normalization -- see class doc. Idempotent for
+            // names that are already sanitized upstream (the common case).
+            const channelName = toXmlTechnicalName(messageFlow.name, messageFlow.id);
             const attrs = [
                 `id="${messageFlow.id}"`,
-                `name="${this.escape(messageFlow.name)}"`,
+                `name="${this.escape(channelName)}"`,
                 `sourceRef="${messageFlow.sourceRef}"`,
                 `targetRef="${messageFlow.targetRef}"`
             ];

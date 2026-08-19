@@ -1,0 +1,292 @@
+# Commit 1: JDBC support + SAP Cloud Integration naming/version/duplicate-ID fixes
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: this file is written for both future Claude sessions and human
+contributors picking up this branch. It explains not just *what* changed but
+*why* — the SAP errors that drove each fix and the evidence behind it — so
+the reasoning doesn't have to be re-derived from scratch.
+
+---
+
+## 1. What this commit adds: JDBC support
+
+The compiler previously had no JDBC adapter at all. This adds it, following
+the same architecture as the existing HTTP/SOAP/SFTP/IDoc/OData adapters,
+using a real SAP-exported JDBC iFlow ZIP as ground truth (not invented).
+
+**New files**:
+- `src/model/JdbcAdapter.ts` — JDBC adapter configuration (data source
+  alias, connection/query timeouts, batch mode, batch operation). Receiver-
+  only: SAP Cloud Integration has no JDBC sender (a database can't push a
+  message into CPI).
+- `src/model/JdbcCall.ts` — a **mid-flow** component, not just a flow-level
+  sender/receiver. Real SAP flows call JDBC as a request-reply step in the
+  *middle* of processing (query a DB, keep going), and a single iFlow may
+  call more than one database. This models that: it produces a BPMN
+  `<serviceTask activityType="ExternalCall">` and separately carries the
+  `JdbcAdapter` config that `BpmnProcessMapper` uses to generate the
+  matching receiver participant + `JDBC` messageFlow.
+- `src/writer/ServiceTaskWriter.ts` — JDBC steps compile to
+  `<bpmn2:serviceTask>`, not `<bpmn2:callActivity>` like other processing
+  components, so this is a new (small, structurally identical) writer.
+
+**Modified to wire it in**: `ComponentRegistry.ts`, `ComponentFactory.ts`
+(`JdbcCall` component type, `JDBC` adapter type), `BpmnProcessMapper.ts`
+(generates the companion participant + messageFlow for every `JdbcCall` in
+the flow, with collision-safe IDs), `ProcessWriter.ts` (dispatches
+`serviceTask` nodes to the new writer), `capabilities.ts`, `index.ts`.
+
+**AI-facing contract**: the SQL query is never invented as an adapter
+property — it's the message body, set by a preceding `ContentModifier`
+(`wrapContent`), exactly matching how the real reference export works
+(`CM_SetDBQuery` → `RR_OCEDB` in the source ZIP).
+
+---
+
+## 2. What broke in real SAP imports, and why
+
+Generating a ZIP and getting `validate() => { valid: true }` was **not**
+sufficient — several real SAP Cloud Integration import errors surfaced only
+by actually testing the output. Each is captured here so it isn't
+rediscovered the hard way again.
+
+### 2a. "Channel Name should be valid XML NCName" / "Whitespace not allowed in Receiver name"
+
+**Root cause**: adapter `.name` fields (e.g. `"HTTPS Receiver"`,
+`"Query Customer DB"`) were written *directly* as the BPMN
+`<messageFlow name="...">` attribute — SAP's "Channel Name" — which must be
+a valid XML NCName (no whitespace, must start with a letter/underscore).
+
+**Fix**: new `src/utils/XmlName.ts`, one shared utility:
+- `toXmlTechnicalName(value, fallback)` — replaces whitespace and any
+  NCName-invalid character with `_`, collapses repeats, prefixes `_` if the
+  result would start with a digit, never returns empty (falls back to a
+  caller-supplied safe default). Preserves word boundaries as underscores
+  rather than concatenating words, so the output stays legible:
+  `"Query Customer DB"` → `"Query_Customer_DB"`,
+  `"Domestic Processing Service"` → `"Domestic_Processing_Service"`.
+- `ensureUniqueTechnicalName(candidate, usedSet)` — deterministic dedup
+  (`name`, `name_2`, `name_3`, ...) for when two different components
+  produce the same technical name.
+- `isValidXmlNCName(value)` — used by `validate()` as a regression guard.
+
+Applied inside every adapter's `.sender()`/`.receiver()` factory
+(`HttpAdapter`, `JdbcAdapter`, `SoapAdapter`, `SftpAdapter`, `IdocAdapter`,
+`ODataAdapter` — the first fix only covered HTTP/JDBC; SOAP/SFTP/IDoc/OData
+had the identical latent bug and were fixed once found). Component IDs from
+AI-supplied JSON go through the same function via
+`ComponentFactory.resolveComponentId()`.
+
+**Important architectural point**: because sanitizing at N call sites is
+fragile (a new adapter, or a mapper-level default, could still reach the
+writer unsanitized), a **safety net was added at the single point where a
+messageFlow name is actually serialized** — `CollaborationWriter.ts` now
+runs every channel name through `toXmlTechnicalName()` one more time before
+writing it, idempotently. This guarantees the invariant for the final XML
+regardless of which upstream code produced the value.
+
+**Also discovered live**: SAP rejects whitespace in the adapter's `Name`
+*property* too (shown as the title in the General/Connection tab), not just
+the technical channel name — this contradicted older internal documentation
+(`VALIDATION_ERRORS_FIXED.md`) that said the `Name` property tolerated
+spaces. Confirmed against a live tenant. Every adapter's `Name:` property
+now reuses the same sanitized value as the channel name (no more
+purposely-different "human-readable" copy for this field).
+
+Participant `name=` attributes (the Sender/Receiver/Integration Process
+boxes) were deliberately **left alone** — real SAP exports in this repo show
+the `"Integration Process"` participant with a space in its name, so that
+field is not NCName-constrained the way messageFlow `name` is.
+
+### 2b. "This component HTTPS with version 1.5 is not supported in Cloud Integration profile"
+
+**Root cause**: `HttpAdapter.receiver()` inherited `ComponentType` from the
+requested `protocol`, so requesting an `"HTTPS"` receiver produced
+`ComponentType=HTTPS`. SAP Cloud Integration has **no HTTPS-typed Receiver**
+in its profile catalog — only Sender. The outbound adapter is always
+`ComponentType=HTTP` (it accepts both `http://` and `https://` target URLs
+via the URL itself).
+
+**Fix**: `HttpAdapter.receiver()` now always produces
+`ComponentType=HTTP`, `TransportProtocol=HTTP`, `componentVersion=1.16`,
+`.../version::1.16.1` — evidence: `DISCOVERY_REPORT_PHASE3.md`,
+"Receiver Metadata (HTTP)", captured from a real SAP export
+(`IPRO_PRODUCT_HTTP.iflw`). The `protocol` config field is still accepted
+(reads naturally when the target `url` is `https://`) but no longer changes
+what's emitted.
+
+### 2c. "This component JDBC with version 1.5 is not supported in Cloud Integration profile"
+
+**Root cause**: diffing the generated JDBC messageFlow property-by-property
+against the reference JDBC export showed one missing property: `Vendor:
+"SAP"` — present in every real JDBC export, absent from this compiler's
+output (HTTP/SOAP don't have this property, which is likely why it was
+missed).
+
+**Fix**: added `Vendor: "SAP"` to `JdbcAdapter`. The JDBC `componentVersion`
+(`1.5`/`1.5.3`) was left unchanged — no evidence in this repo suggests a
+different version, and it matches the reference export exactly. If a live
+tenant's Cloud Integration profile has moved past that version, that would
+need a newer reference export to confirm rather than guessing a number.
+
+### 2d. "Enter a valid address, for example http(s)://example" on the HTTP receiver
+
+**Root cause**: `HttpAdapter.receiver()` wrote the configured URL to a
+`staticUrl` property. SAP's Address field does not read `staticUrl` at
+all — it reads **`httpAddressWithoutQuery`** (+ `httpAddressQuery` for any
+query string). This wasn't a guess: this repo's own
+`V1.2.3a_ROUTER_VALIDATION_FIX.md`, from an earlier SAP validation cycle,
+already documents *"HTTP adapter requires `httpAddressWithoutQuery` to be
+configured"*, and the same property names already existed (unused by
+`HttpAdapter`) in `BpmnProcessMapper.ts`'s older hardcoded default block.
+
+**Fix**: new `splitAddressForHttpReceiver()` helper splits `config.url` into
+`httpAddressWithoutQuery` (everything before `?`) and `httpAddressQuery`
+(everything after, no leading `?`). Both properties are always present
+(empty when unconfigured) to match the evidenced pattern. `staticUrl` was
+removed.
+
+**Also added**: `validate()` now emits a **warning** (`AD-008`, not an
+error) when an HTTP receiver has no address configured — per the same
+evidence, SAP treats this as an acceptable "configure later in the SAP UI"
+state for template flows, not a structural failure, so it must not flip
+`validate()` to invalid.
+
+### 2e. CP-001 — "Duplicate component ID: ProcessCall_1786467900757"
+
+**Root cause**: several `Component` subclasses generate their own ID via
+`Date.now()` when none is supplied, which can collide when two instances of
+the same type are constructed within the same millisecond. This had already
+been fixed once for `ProcessCall` (accepts an optional `id` param), but
+`XmlValidator`, `MessageMapping`, `Multicast`, `Splitter`, `Gather`, and
+`XsltMapping` still had the bug.
+
+**Fix**: added the same optional `id?: string` parameter (with the
+`Date.now()` fallback kept, matching the existing pattern) to all six, wired
+through `ComponentFactory.createComponent()`. More importantly, added
+`ComponentFactory.resolveComponentId()`: every component created via
+`fromJson()` now gets its final technical ID computed **once**, up front —
+sanitized via `toXmlTechnicalName()` and deduplicated via
+`ensureUniqueTechnicalName()` against every other component in the same
+flow (main process, subprocesses, and exception subprocesses share one
+`usedComponentIds` set). This closes the loophole for the actual AI-JSON
+code path regardless of what any individual constructor's fallback does.
+
+---
+
+## 3. Validation hardening
+
+`validate()` used to only check structure (sender/receiver presence, Router
+route counts, component-ID uniqueness at the `IFlow` level) — never the
+*generated adapter output*, which is why `valid: true` could still produce a
+SAP-rejected ZIP. Added, in `src/api/validate.ts`:
+
+- **NM-001** — channel name is not a valid XML NCName (regression guard;
+  should be unreachable now that every adapter sanitizes at construction,
+  but catches a future regression before it reaches SAP).
+- **AD-006** — HTTP(S) sender address doesn't start with `/`.
+- **AD-007** — adapter `(ComponentType, direction)` → `componentVersion`
+  doesn't match the evidence-backed value this compiler is known to
+  generate correctly (scoped to HTTP/HTTPS/JDBC — the two adapters with
+  direct evidence of a wrong version; deliberately not extended to
+  SOAP/SFTP/IDoc/OData without evidence).
+- **AD-008** — HTTP receiver has no configured address (warning, not an
+  error — see §2d).
+
+These run against the *actual* `HttpAdapter`/`JdbcAdapter` instances
+produced by `fromJson()`, including mid-flow `JdbcCall` adapters (which
+aren't part of `getSender()`/`getReceiver()` and were previously invisible
+to `validate()` entirely).
+
+---
+
+## 4. Files changed (this package only — root `src/` and Fiori/CAP untouched)
+
+**New**:
+- `src/model/JdbcAdapter.ts`
+- `src/model/JdbcCall.ts`
+- `src/writer/ServiceTaskWriter.ts`
+- `src/utils/XmlName.ts`
+- `scripts/inspectZip.ts` (dependency-free ZIP reader for the regression tests below)
+- `test-jdbc-regression.ts`
+- `test-jdbc-ai-scenarios-regression.ts`
+- `test-naming-version-regression.ts`
+- `test-customer-flow-regression.ts`
+
+**Modified**:
+- `src/api/capabilities.ts`, `src/api/validate.ts`
+- `src/factory/ComponentFactory.ts`
+- `src/index.ts`
+- `src/mapper/BpmnProcessMapper.ts`
+- `src/model/HttpAdapter.ts`, `SoapAdapter.ts`, `SftpAdapter.ts`,
+  `IdocAdapter.ts`, `ODataAdapter.ts`
+- `src/model/XmlValidator.ts`, `MessageMapping.ts`, `Multicast.ts`,
+  `Splitter.ts`, `Gather.ts`, `XsltMapping.ts`
+- `src/model/DataStore.ts`, `src/model/IFlow.ts`
+- `src/registry/ComponentRegistry.ts`
+- `src/packager/IflowPackager.ts` (CRLF line endings — pre-existing fix,
+  bundled in from this branch's earlier WIP state)
+- `src/serializer/IflowSerializer.ts`
+- `src/writer/CollaborationWriter.ts`, `ProcessWriter.ts`
+
+**Deliberately not touched**: the Fiori UI, the CAP `downloadFlow`/service
+layer (not part of this repository), and the root-level `src/` tree (a
+separate, only-partially-synced mirror of `packages/compiler/src/` that
+predates this work — see `COMPILER_PACKAGE_MIGRATION.md` for why it exists;
+it was not updated to avoid conflating two different maintenance surfaces
+in one commit).
+
+---
+
+## 5. Testing
+
+Every fix above was verified against the **raw generated `.iflw` XML**, not
+just `validate()`'s return value — `validate()` passing was explicitly
+*not* treated as proof of correctness, since that was the original problem.
+
+Regression suites (plain `ts-node` scripts — this repo has no Jest
+installed despite some `*.test.ts` files using Jest syntax; see
+`test-jdbc-regression.ts` etc. for the actual runnable pattern):
+- `test-jdbc-regression.ts` — single + multiple JDBC instances, resource
+  packaging, config validation (rejects unsupported properties / missing
+  `dataSourceAlias` / Sender direction).
+- `test-jdbc-ai-scenarios-regression.ts` — full natural-language-shaped
+  scenarios end to end (`fromJson → validate → compileToZip`).
+- `test-naming-version-regression.ts` — the three required scenarios
+  (simple HTTPS, HTTPS+JDBC, Router-based domestic/international routing
+  matching the pre-existing `multiple-processcall-regression.test.ts`
+  scenario), plus a dedicated duplicate-ID stress test and direct
+  unit-checks of `toXmlTechnicalName()` against the exact examples above.
+- `test-customer-flow-regression.ts` — pre-existing non-JDBC scenario,
+  confirmed not to regress.
+- `test/run-rt-003-tests.ts`, `test/run-mapping-regression-simple.ts` —
+  pre-existing Router/Mapping suites, confirmed not to regress.
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Known limitations
+
+- JDBC `componentVersion` (`1.5`/`1.5.3`) is pinned to the reference export
+  evidence in this repo. If a target tenant's Cloud Integration profile has
+  moved to a newer version, this needs a current SAP export or live-tenant
+  check to confirm — not a guess.
+- Two other adapter constructors accepted an `id`/name-sanitization pattern
+  matching only what's evidenced in this repo; SOAP/SFTP/IDoc/OData version
+  numbers were not re-validated against a live tenant (only their channel
+  name/`Name` property sanitization was fixed).
+- `ComponentFactory.createComponent()`'s `Date.now()` fallback (for the six
+  component types fixed in §2e) remains as a safety net for direct
+  model-class usage *outside* `fromJson()` — that code path has no shared
+  "used IDs" set to dedupe against, same as before this change.

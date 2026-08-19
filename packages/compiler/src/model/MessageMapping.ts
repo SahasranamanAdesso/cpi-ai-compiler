@@ -99,14 +99,18 @@ export class MessageMapping extends Component {
      *     }
      * );
      * ```
+     *
+     * @param id - Optional component ID (auto-generated if not provided)
      */
     constructor(
         name: string,
         mappingName: string,
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        // Generate unique ID for this component
-        const id = `Mapping_${Date.now()}`;
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `Mapping_${Date.now()}`;
 
         // Extract base name (remove .mmap extension)
         const baseName = mappingName.replace('.mmap', '');
@@ -127,7 +131,7 @@ export class MessageMapping extends Component {
         // Create Component with MessageMapping type (registry key)
         // Registry metadata will inject: activityType="Mapping",
         // cmdVariantUri, componentVersion
-        super(id, name, "MessageMapping", properties);
+        super(componentId, name, "MessageMapping", properties);
     }
 
     /**

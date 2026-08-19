@@ -212,7 +212,11 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
                 includeMessageHeaders: "true",
                 visibility: "local",
                 encrypt: "true",
-                expire: "30"
+                expire: "30",
+                // Retention Threshold for Alerting (days). SAP rejects this as
+                // empty at design-time if not set. Evidence: agg-test "Write 1"
+                // step, <key>alert</key><value>2</value>
+                alert: "2"
             }
         }
     },
@@ -551,6 +555,32 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
             defaultProperties: {
                 processId: ""
             }
+        }
+    },
+
+    /**
+     * JDBC Call (mid-flow request-reply database call)
+     * BPMN: <serviceTask activityType="ExternalCall">
+     *
+     * Evidence Source:
+     * - "Send Inbound Normal Orders from OCE to S4HANA.iflw", ServiceTask_8
+     *   "RR_OCEDB" (see model/JdbcCall.ts and model/JdbcAdapter.ts for the
+     *   full evidence trail, including the paired JDBC messageFlow)
+     *
+     * The step itself carries no adapter configuration -- that lives on the
+     * JDBC messageFlow that BpmnProcessMapper generates alongside it (see
+     * JdbcCall.adapter). Only activityType/cmdVariantUri/componentVersion
+     * are required on the serviceTask, exactly matching the SAP export.
+     */
+    JdbcCall: {
+        displayName: "JDBC Call",
+        bpmnElement: "serviceTask",
+        activityType: "ExternalCall",
+        metadata: {
+            activityType: "ExternalCall",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::ExternalCall/version::1.0.4",
+            componentVersion: "1.0",
+            defaultProperties: {}
         }
     }
 

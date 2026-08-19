@@ -6,6 +6,7 @@ import { EventWriter } from "./EventWriter";
 import { CallActivityWriter } from "./CallActivityWriter";
 import { ExclusiveGatewayWriter } from "./ExclusiveGatewayWriter";
 import { ParallelGatewayWriter } from "./ParallelGatewayWriter";
+import { ServiceTaskWriter } from "./ServiceTaskWriter";
 
 /**
  * ProcessWriter - Writes BPMN <bpmn2:process> element
@@ -17,6 +18,7 @@ export class ProcessWriter {
     private callActivityWriter = new CallActivityWriter();
     private exclusiveGatewayWriter = new ExclusiveGatewayWriter();
     private parallelGatewayWriter = new ParallelGatewayWriter();
+    private serviceTaskWriter = new ServiceTaskWriter();
 
     write(process: BpmnProcess): string {
         const lines: string[] = [];
@@ -75,6 +77,8 @@ export class ProcessWriter {
                 nodeXml = this.eventWriter.write(node, nodeIncoming, nodeOutgoing);
             } else if (node.type === "callActivity") {
                 nodeXml = this.callActivityWriter.write(node, nodeIncoming, nodeOutgoing);
+            } else if (node.type === "serviceTask") {
+                nodeXml = this.serviceTaskWriter.write(node, nodeIncoming, nodeOutgoing);
             } else if (node.type === "exclusiveGateway") {
                 // Find default route for this gateway
                 // Default route is the one WITHOUT a condition expression

@@ -1,3 +1,5 @@
+import { toXmlTechnicalName } from '../utils/XmlName';
+
 /**
  * IdocAdapter - SAP IDoc adapter for SAP system integration
  *
@@ -60,8 +62,9 @@ export class IdocAdapter {
         timeout?: number;
         compressMessage?: boolean;
     }): IdocAdapter {
+        const channelName = toXmlTechnicalName(config.name, "IDoc_Receiver");
         return new IdocAdapter(
-            config.name,
+            channelName,
             "Receiver",
             {
                 address: config.address,
@@ -76,7 +79,11 @@ export class IdocAdapter {
                 sendHttpResponseCode: "0",
                 allowChunking: "1",
                 proxyType: config.locationId ? "sapcc" : "none",
+                // SAP rejects whitespace in this "Name" property too, not
+                // just the channel name -- use the same sanitized value.
                 system: "Receiver",
+                Name: channelName,
+                Description: "",
                 direction: "Receiver",
                 componentVersion: "1.8",
                 MessageProtocolVersion: "1.8.1",
@@ -121,15 +128,20 @@ export class IdocAdapter {
         address: string;
         credentialName: string;
     }): IdocAdapter {
+        const channelName = toXmlTechnicalName(config.name, "IDoc_Sender");
         return new IdocAdapter(
-            config.name,
+            channelName,
             "Sender",
             {
                 address: config.address,
                 credentialName: config.credentialName,
                 authentication: "Basic",
                 IDocContentType: "application/x-sap.idoc",
+                // SAP rejects whitespace in this "Name" property too, not
+                // just the channel name -- use the same sanitized value.
                 system: "Sender",
+                Name: channelName,
+                Description: "",
                 direction: "Sender",
                 componentVersion: "1.8",
                 MessageProtocolVersion: "1.8.1",

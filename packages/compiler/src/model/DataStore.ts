@@ -50,6 +50,11 @@ export class DataStore extends Component {
             visibility?: "local" | "global";
             encrypt?: boolean;
             expire?: number;
+            /** Retention Threshold for Alerting, in days. SAP requires this to be set
+             *  (a blank value fails SAP's design-time validation with
+             *  "retention threshold for alerting cannot be empty").
+             *  Evidence: reference/sap-exports/agg-test "Write 1" step, <key>alert</key><value>2</value> */
+            alertThreshold?: number;
         } = {}
     ): DataStore {
         const id = `DataStore_Write_${Date.now()}`;
@@ -60,7 +65,8 @@ export class DataStore extends Component {
             entryId,  // Required for all operations
             visibility: options.visibility || "local",
             encrypt: options.encrypt !== undefined ? String(options.encrypt) : "true",
-            expire: options.expire !== undefined ? String(options.expire) : "30"
+            expire: options.expire !== undefined ? String(options.expire) : "30",
+            alert: options.alertThreshold !== undefined ? String(options.alertThreshold) : "2"
         };
 
         return new DataStore(id, name, "DBStorage", properties);

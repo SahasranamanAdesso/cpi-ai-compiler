@@ -106,7 +106,7 @@ export class IflowPackager {
             ' .blueprint;version="[1.0.0,2.0.0)",org.slf4j;version="1.6",org.springfr',
             ' amework.beans.factory.config;version="3.0"',
             ''
-        ].join('\n');
+        ].join('\r\n');
 
         const manifestPath = path.join(metaInfDir, 'MANIFEST.MF');
         fs.writeFileSync(manifestPath, manifest, 'utf-8');
@@ -133,7 +133,7 @@ export class IflowPackager {
             '    </natures>',
             '</projectDescription>',
             ''
-        ].join('\n');
+        ].join('\r\n');
 
         const projectPath = path.join(flowDir, '.project');
         fs.writeFileSync(projectPath, project, 'utf-8');
@@ -145,7 +145,7 @@ export class IflowPackager {
             `#${new Date().toUTCString()}`,
             `description=`,
             ''
-        ].join('\n');
+        ].join('\r\n');
 
         const metainfoPath = path.join(flowDir, 'metainfo.prop');
         fs.writeFileSync(metainfoPath, metainfo, 'utf-8');
@@ -158,7 +158,7 @@ export class IflowPackager {
         const paramProp = [
             `#${new Date().toUTCString()}`,
             ''
-        ].join('\n');
+        ].join('\r\n');
         fs.writeFileSync(path.join(resourcesDir, 'parameters.prop'), paramProp, 'utf-8');
 
         // parameters.propdef - XML structure as per SAP format

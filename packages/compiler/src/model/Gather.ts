@@ -95,14 +95,18 @@ export class Gather extends Component {
      *     }
      * );
      * ```
+     *
+     * @param id - Optional component ID (auto-generated if not provided)
      */
     constructor(
         name: string,
         aggregationAlgorithm: string = "sap-identical-multi-mapping",
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        // Generate unique ID for this component
-        const id = `Gather_${Date.now()}`;
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `Gather_${Date.now()}`;
 
         // Build properties with SAP-compatible keys
         // Evidence: POC.iflw lines 1020-1051
@@ -115,7 +119,7 @@ export class Gather extends Component {
         // Create Component with Gather type (registry key)
         // Registry metadata will inject: activityType="Gather",
         // cmdVariantUri, componentVersion, and default properties
-        super(id, name, "Gather", properties);
+        super(componentId, name, "Gather", properties);
     }
 
     /**

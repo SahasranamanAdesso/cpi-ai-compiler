@@ -12,6 +12,9 @@ import { BpmnEdge } from "../ir/BpmnEdge";
 import { ComponentMapper } from "./ComponentMapper";
 import { Router } from "../model/Router";
 import { Multicast } from "../model/Multicast";
+import { JdbcCall } from "../model/JdbcCall";
+import { IdGenerator } from "../utils/IdGenerator";
+import { ensureUniqueTechnicalName } from "../utils/XmlName";
 
 /**
  * BpmnProcessMapper - Maps entire IFlow to complete BpmnDefinitions
@@ -76,6 +79,16 @@ export class BpmnProcessMapper {
 
         const process = new BpmnProcess("Process_1", "Integration Process");
         const collaboration = new BpmnCollaboration("Collaboration_1", "Default Collaboration");
+
+        // Channel (messageFlow "name" attribute) uniqueness across the WHOLE
+        // iFlow -- sender, receiver, and every mid-flow adapter call (JDBC,
+        // etc.) share this one set. Each adapter class already sanitizes its
+        // own channel name into a valid NCName (HttpAdapter, JdbcAdapter),
+        // but sanitization alone can't prevent two different adapters from
+        // producing the identical name (e.g. two JdbcCall instances both
+        // defaulting to the literal "JDBC" channel name). Collisions are
+        // resolved deterministically with a numeric suffix.
+        const usedChannelNames = new Set<string>();
 
         // Add collaboration-level properties
         collaboration.addProperty("namespaceMapping", "");
@@ -243,9 +256,10 @@ export class BpmnProcessMapper {
         // Message flow from sender to start event
         // Use custom sender adapter if provided, otherwise default HTTPS
         const sender = flow.getSender();
+        const senderChannelName = ensureUniqueTechnicalName(sender ? sender.name : "HTTPS", usedChannelNames);
         const senderMessageFlow = new BpmnMessageFlow(
             "MessageFlow_4",
-            sender ? sender.name : "HTTPS",
+            senderChannelName,
             "Participant_1",
             "StartEvent_2"
         );
@@ -289,9 +303,10 @@ export class BpmnProcessMapper {
         // Message flow from end event to receiver
         // Use custom receiver adapter if provided, otherwise default HTTP
         const receiver = flow.getReceiver();
+        const receiverChannelName = ensureUniqueTechnicalName(receiver ? receiver.name : "HTTP", usedChannelNames);
         const receiverMessageFlow = new BpmnMessageFlow(
             "MessageFlow_5",
-            receiver ? receiver.name : "HTTP",
+            receiverChannelName,
             "EndEvent_2",
             "Participant_2"
         );
@@ -360,6 +375,48 @@ export class BpmnProcessMapper {
         }
         collaboration.addMessageFlow(receiverMessageFlow);
 
+        // Mid-flow adapter calls (currently: JDBC) each need their own
+        // receiver participant + messageFlow, in addition to whatever the
+        // flow's single sender/receiver adapters already added above.
+        // Unlike Router/Multicast (which only affect sequence flow metadata),
+        // these components change the collaboration itself, so they're
+        // handled here rather than in ComponentMapper.
+        //
+        // Distinct ID prefixes ("Participant_Jdbc"/"MessageFlow_Jdbc") avoid
+        // colliding with the fixed "Participant_1"/"Participant_2"/
+        // "MessageFlow_4"/"MessageFlow_5" literals used above -- the same
+        // class of duplicate-ID bug fixed for ProcessCall (CP-001).
+        components.forEach(component => {
+            if (!(component instanceof JdbcCall)) {
+                return;
+            }
+
+            const participantId = IdGenerator.next("Participant_Jdbc");
+            const messageFlowId = IdGenerator.next("MessageFlow_Jdbc");
+            const adapter = component.adapter;
+
+            const jdbcParticipant = new BpmnParticipant(
+                participantId,
+                adapter.properties.system || component.name,
+                "EndpointRecevier"
+            );
+            jdbcParticipant.addProperty("ifl:type", "EndpointRecevier");
+            collaboration.addParticipant(jdbcParticipant);
+
+            const jdbcChannelName = ensureUniqueTechnicalName("JDBC", usedChannelNames);
+            const jdbcMessageFlow = new BpmnMessageFlow(
+                messageFlowId,
+                jdbcChannelName,
+                component.id,
+                participantId,
+                "Receiver",
+                "JDBC",
+                { ...adapter.properties }
+            );
+            jdbcMessageFlow.addProperty("cmdVariantUri", adapter.getCmdVariantUri());
+            collaboration.addMessageFlow(jdbcMessageFlow);
+        });
+
         // Create BPMN Diagram with visual layout
         const diagram = this.createDiagram(collaboration, process);
         const definitions = new BpmnDefinitions("Definitions_1", collaboration, process);
@@ -391,6 +448,10 @@ export class BpmnProcessMapper {
         );
 
         // Add shapes for all participants
+        // Mid-flow adapter participants (e.g. JDBC) use distinct ID prefixes
+        // ("Participant_Jdbc_N") and are stacked above the process lane,
+        // spaced out horizontally so multiple instances don't overlap.
+        let extraParticipantIndex = 0;
         collaboration.participants.forEach(participant => {
             if (participant.id === "Participant_1") {
                 // Sender participant
@@ -401,21 +462,26 @@ export class BpmnProcessMapper {
             } else if (participant.id === "Participant_Process_1") {
                 // Integration Process participant
                 diagram.addShape(new BpmnShape(participant.id, participant.id, 250, 60, 540, 220));
+            } else {
+                // Mid-flow adapter participant (JDBC, etc.)
+                const x = 250 + (extraParticipantIndex * 180);
+                diagram.addShape(new BpmnShape(participant.id, participant.id, x, -250, 100, 140));
+                extraParticipantIndex++;
             }
         });
 
         // Add shapes for process elements
-        // For Router flows, position CallActivities vertically to avoid overlap
+        // For Router flows, position CallActivities/ServiceTasks vertically to avoid overlap
         let callActivityIndex = 0;
-        const callActivityCount = process.nodes.filter(n => n.type === "callActivity").length;
+        const callActivityCount = process.nodes.filter(n => n.type === "callActivity" || n.type === "serviceTask").length;
 
         process.nodes.forEach(node => {
             if (node.type === "startEvent") {
                 diagram.addShape(new BpmnShape(node.id, node.id, 292, 142, 32, 32));
             } else if (node.type === "endEvent") {
                 diagram.addShape(new BpmnShape(node.id, node.id, 703, 142, 32, 32));
-            } else if (node.type === "callActivity") {
-                // Position CallActivities vertically for Router flows
+            } else if (node.type === "callActivity" || node.type === "serviceTask") {
+                // Position CallActivities/ServiceTasks vertically for Router flows
                 // Base position: (412, 132)
                 // Vertical spacing: 80 pixels between components
                 const baseY = 100;
@@ -492,6 +558,15 @@ export class BpmnProcessMapper {
                 // EndEvent to Receiver
                 edge.addWaypoint(719, 158);
                 edge.addWaypoint(950, 170);
+            } else {
+                // Mid-flow adapter messageFlow (e.g. JDBC): derive waypoints
+                // from the already-placed shapes for its source/target.
+                const sourceShape = diagram.shapes.find(s => s.bpmnElement === flow.sourceRef);
+                const targetShape = diagram.shapes.find(s => s.bpmnElement === flow.targetRef);
+                if (sourceShape && targetShape) {
+                    edge.addWaypoint(sourceShape.x + sourceShape.width / 2, sourceShape.y + sourceShape.height / 2);
+                    edge.addWaypoint(targetShape.x + targetShape.width / 2, targetShape.y + targetShape.height / 2);
+                }
             }
 
             diagram.addEdge(edge);

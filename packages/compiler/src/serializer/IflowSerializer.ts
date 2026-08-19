@@ -39,7 +39,9 @@ export class IflowSerializer {
         fs.mkdirSync(iflowDir, { recursive: true });
 
         // Write BPMN XML
-        const xml = this.bpmnWriter.write(definitions);
+        // SAP's own exports use CRLF line endings throughout (verified against
+        // reference/sap-exports/agg-test/.../Agg Test.iflw) -- normalize to match.
+        const xml = this.bpmnWriter.write(definitions).replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
         const iflowPath = path.join(iflowDir, `${flowName}.iflw`);
         fs.writeFileSync(iflowPath, xml, 'utf-8');
 

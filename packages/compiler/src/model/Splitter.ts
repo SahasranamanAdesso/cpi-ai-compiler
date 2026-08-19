@@ -96,14 +96,18 @@ export class Splitter extends Component {
      *     }
      * );
      * ```
+     *
+     * @param id - Optional component ID (auto-generated if not provided)
      */
     constructor(
         name: string,
         splitExpression: string,
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        // Generate unique ID for this component
-        const id = `Splitter_${Date.now()}`;
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `Splitter_${Date.now()}`;
 
         // Determine expression type from additional properties or default to XPath
         const exprType = additionalProperties.exprType || "XPath";
@@ -120,7 +124,7 @@ export class Splitter extends Component {
         // Create Component with GeneralSplitter type (registry key)
         // Registry metadata will inject: activityType="Splitter",
         // cmdVariantUri, componentVersion, and default properties
-        super(id, name, "GeneralSplitter", properties);
+        super(componentId, name, "GeneralSplitter", properties);
     }
 
     /**

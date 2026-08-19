@@ -23,6 +23,8 @@ import { ODataAdapter } from '../model/ODataAdapter';
 import { SftpAdapter } from '../model/SftpAdapter';
 import { SoapAdapter } from '../model/SoapAdapter';
 import { IdocAdapter } from '../model/IdocAdapter';
+import { JdbcAdapter } from '../model/JdbcAdapter';
+import { JdbcCall } from '../model/JdbcCall';
 import { Router } from '../model/Router';
 import { GroovyScript } from '../model/GroovyScript';
 import { DataStore } from '../model/DataStore';
@@ -41,6 +43,7 @@ import { XsdResource } from '../model/XsdResource';
 import { XsltResource } from '../model/XsltResource';
 import { ComponentRegistry } from '../registry/ComponentRegistry';
 import { IdGenerator } from '../utils/IdGenerator';
+import { toXmlTechnicalName, ensureUniqueTechnicalName } from '../utils/XmlName';
 
 /**
  * Normalizes Markdown URLs to plain URLs
@@ -62,6 +65,28 @@ function normalizeUrl(value: any): any {
     }
 
     return value;
+}
+
+/**
+ * Normalizes an XSD schema reference for XmlValidator.
+ *
+ * SAP packages XSD resources at src/main/resources/xsd/{name}.xsd and expects
+ * the XmlValidator's "xsd" property to reference them as "/xsd/{name}.xsd"
+ * (evidence: POC.iflw XmlValidator step, <key>xsd</key><value>/xsd/ProductTarget.xsd</value>).
+ * AI-generated JSON frequently supplies just the bare filename (e.g.
+ * "CustomerSchema.xsd"), which SAP cannot resolve at runtime ("schema does
+ * not exist"), even though the resource itself is packaged correctly.
+ * This does not apply when xmlSchemaSource is "header" -- there, "xsd" is
+ * unused (the schema path comes from a message header instead).
+ */
+function normalizeXsdPath(xsd: string, xmlSchemaSource: unknown): string {
+    if (xmlSchemaSource === 'header') {
+        return xsd;
+    }
+    if (!xsd || xsd.startsWith('/') || /^https?:\/\//i.test(xsd)) {
+        return xsd;
+    }
+    return `/xsd/${xsd}`;
 }
 
 /**
@@ -91,7 +116,8 @@ export type ComponentType =
     | 'MessageMapping'
     | 'XmlValidator'
     | 'XsltMapping'
-    | 'ProcessCall';
+    | 'ProcessCall'
+    | 'JdbcCall';
 
 /**
  * Supported adapter types
@@ -102,7 +128,8 @@ export type AdapterType =
     | 'OData'
     | 'SFTP'
     | 'SOAP'
-    | 'IDoc';
+    | 'IDoc'
+    | 'JDBC';
 
 /**
  * Adapter direction
@@ -180,6 +207,37 @@ export interface IFlowJson {
         }>;
         connections?: ConnectionConfig[];
     }>;
+}
+
+/**
+ * Resolves the final, XML-safe, iFlow-unique technical ID for a component
+ * defined in AI JSON.
+ *
+ * Root cause of CP-001 ("Duplicate component ID: ProcessCall_1786467900757"):
+ * several Component subclasses fall back to a `Date.now()`-based id when no
+ * id is supplied, and that fallback can collide when two components of the
+ * same type are constructed within the same millisecond. Passing an
+ * AI-supplied `compDef.id` through avoids that fallback entirely -- but the
+ * factory was not: (a) guaranteeing that id is a valid XML NCName (an AI
+ * might supply a human-readable id containing spaces), or (b) guarding
+ * against two different components resolving to the same id (whether two
+ * identical raw ids, or two different display names/ids that sanitize to
+ * the same technical name).
+ *
+ * This closes both gaps for every component created via fromJson(), while
+ * leaving the per-class Date.now() fallback untouched as a safety net for
+ * direct createComponent()/model-class usage outside fromJson() (the
+ * existing "Extended API" style documented in this SDK), where no shared
+ * `usedIds` set exists to dedupe against.
+ *
+ * @param rawId - The `id` field from the AI JSON component definition, if any
+ * @param type - Component type, used only to seed a fallback id prefix
+ * @param usedIds - Technical ids already assigned within this fromJson() call
+ */
+function resolveComponentId(rawId: string | undefined, type: string, usedIds: Set<string>): string {
+    const sanitized = rawId ? toXmlTechnicalName(rawId, '') : '';
+    const candidate = sanitized || IdGenerator.next(type);
+    return ensureUniqueTechnicalName(candidate, usedIds);
 }
 
 /**
@@ -281,7 +339,8 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                     return DataStore.Write(componentName, storageName, entryId, {
                         visibility: config.visibility,
                         encrypt: config.encrypt,
-                        expire: config.expire
+                        expire: config.expire,
+                        alertThreshold: config.alertThreshold
                     });
                 case 'get':
                     return DataStore.Get(componentName, storageName, entryId);
@@ -292,7 +351,7 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             }
 
         case 'Multicast':
-            return new Multicast(componentName);
+            return new Multicast(componentName, id);
 
         case 'Splitter':
             if (!config.expression) {
@@ -306,7 +365,8 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                     Streaming: config.streaming,
                     ParallelProcessing: config.parallelProcessing,
                     StopOnExecution: config.stopOnException
-                }
+                },
+                id
             );
 
         case 'Gather':
@@ -317,7 +377,8 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                     messageType: config.messageType,
                     targetXPath: config.targetXPath,
                     sourceXPath: config.sourceXPath
-                }
+                },
+                id
             );
 
         case 'MessageMapping':
@@ -326,18 +387,25 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             }
             // Filter out mappingName from properties to avoid duplicate in BPMN output
             const { mappingName: _, ...mappingProps } = properties;
-            return new MessageMapping(componentName, config.mappingName, mappingProps);
+            return new MessageMapping(componentName, config.mappingName, mappingProps, id);
 
-        case 'XmlValidator':
+        case 'XmlValidator': {
             if (!config.xsd) {
                 throw new Error('XmlValidator requires xsd property');
             }
+            // XmlValidator's constructor spreads additionalProperties last, so a
+            // raw "xsd" left in `properties` would silently override the
+            // normalized path below. Strip it out, same pattern used for
+            // MessageMapping's mappingName.
+            const { xsd: _xsd, ...xmlValidatorProps } = properties;
             return new XmlValidator(
                 componentName,
-                config.xsd,
+                normalizeXsdPath(config.xsd, config.xmlSchemaSource),
                 config.preventException !== undefined ? config.preventException : false,
-                properties
+                xmlValidatorProps,
+                id
             );
+        }
 
         case 'XsltMapping':
             if (!config.mappingName) {
@@ -347,7 +415,8 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 componentName,
                 config.mappingName,
                 config.outputFormat || 'Bytes',
-                properties
+                properties,
+                id
             );
 
         case 'ProcessCall':
@@ -361,6 +430,19 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 properties,
                 id
             );
+
+        case 'JdbcCall': {
+            if (!config.dataSourceAlias) {
+                throw new Error('JdbcCall requires dataSourceAlias property');
+            }
+            // JdbcAdapter.receiver validates the property set itself (unknown
+            // JDBC properties throw) -- pass everything through as-is.
+            const adapter = JdbcAdapter.receiver({
+                name: componentName,
+                ...properties
+            } as any);
+            return new JdbcCall(componentName, adapter, id);
+        }
 
         default:
             throw new Error(`Unsupported component type: ${type}`);
@@ -401,7 +483,7 @@ export function createAdapter(
     type: AdapterType,
     direction: AdapterDirection,
     config: AdapterConfig
-): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter {
+): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter {
     // Normalize config (convert Markdown URLs to plain URLs)
     const normalizedConfig = normalizeConfig(config);
 
@@ -495,13 +577,23 @@ export function createAdapter(
 
         case 'SOAP':
             if (direction === 'Sender') {
-                // SOAP Sender not commonly used, create basic adapter
+                // SOAP Sender not commonly used, create basic adapter.
+                // Constructed directly (SoapAdapter has no .sender() factory)
+                // so, unlike .receiver(), the channel name must be sanitized
+                // here rather than inside the class.
+                const soapSenderDisplayName = normalizedConfig.name || 'SOAP Sender';
+                const soapSenderChannelName = toXmlTechnicalName(soapSenderDisplayName, 'SOAP_Sender');
                 return new SoapAdapter(
-                    normalizedConfig.name || 'SOAP Sender',
+                    soapSenderChannelName,
                     'Sender',
                     {
                         address: normalizedConfig.address || '/',
-                        ...normalizedConfig
+                        ...normalizedConfig,
+                        // SAP rejects whitespace in this "Name" property too,
+                        // not just the channel name -- use the same
+                        // sanitized value.
+                        Name: soapSenderChannelName,
+                        Description: ''
                     }
                 );
             } else {
@@ -538,6 +630,21 @@ export function createAdapter(
                     compressMessage: normalizedConfig.compressMessage
                 });
             }
+
+        case 'JDBC':
+            if (direction === 'Sender') {
+                throw new Error('JDBC adapter does not support Sender direction (SAP CPI has no JDBC sender)');
+            }
+            return JdbcAdapter.receiver({
+                name: normalizedConfig.name,
+                dataSourceAlias: normalizedConfig.dataSourceAlias,
+                system: normalizedConfig.system,
+                connectionTimeout: normalizedConfig.connectionTimeout,
+                queryTimeout: normalizedConfig.queryTimeout,
+                maxRecords: normalizedConfig.maxRecords,
+                batchMode: normalizedConfig.batchMode,
+                batchOperation: normalizedConfig.batchOperation
+            });
 
         default:
             throw new Error(`Unsupported adapter type: ${type}`);
@@ -605,6 +712,12 @@ export function fromJson(json: IFlowJson): IFlow {
     // Component ID mapping (AI IDs → actual Component instances)
     const componentMap = new Map<string, Component>();
 
+    // Technical (XML) ids assigned so far in this flow -- shared across main
+    // components, subprocess components, and exception-subprocess components,
+    // since all of them land in the same generated .iflw and must not collide
+    // (see resolveComponentId() for why this exists / CP-001 root cause).
+    const usedComponentIds = new Set<string>();
+
     // Set sender adapter
     if (json.sender) {
         const sender = createAdapter(json.sender.type, 'Sender', json.sender.config);
@@ -620,11 +733,14 @@ export function fromJson(json: IFlowJson): IFlow {
     // Add components
     if (json.components) {
         for (const compDef of json.components) {
-            const component = createComponent(compDef.type, compDef.config, compDef.id);
+            const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
+            const component = createComponent(compDef.type, compDef.config, resolvedId);
             flow.addComponent(component);
 
-            // Store mapping from AI ID to actual component
-            // Use component.id as the key (which is either the provided id or auto-generated)
+            // Store mapping from AI ID to actual component. Keyed by the RAW
+            // AI-supplied id (not the sanitized technical id) so connections
+            // in the JSON keep resolving by the id the caller actually wrote --
+            // sanitization only affects what appears in the generated XML.
             componentMap.set(compDef.id || component.id, component);
         }
     }
@@ -663,7 +779,8 @@ export function fromJson(json: IFlowJson): IFlow {
             // Add subprocess components
             if (subDef.components) {
                 for (const compDef of subDef.components) {
-                    const component = createComponent(compDef.type, compDef.config, compDef.id);
+                    const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
+                    const component = createComponent(compDef.type, compDef.config, resolvedId);
                     subprocess.addComponent(component);
 
                     componentMap.set(compDef.id || component.id, component);
@@ -694,7 +811,8 @@ export function fromJson(json: IFlowJson): IFlow {
             // Add exception subprocess components
             if (exDef.components) {
                 for (const compDef of exDef.components) {
-                    const component = createComponent(compDef.type, compDef.config, compDef.id);
+                    const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
+                    const component = createComponent(compDef.type, compDef.config, resolvedId);
                     exSubprocess.addComponent(component);
 
                     componentMap.set(compDef.id || component.id, component);

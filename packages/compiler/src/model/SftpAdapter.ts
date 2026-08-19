@@ -1,3 +1,5 @@
+import { toXmlTechnicalName } from '../utils/XmlName';
+
 /**
  * SftpAdapter - SFTP adapter for secure file transfer
  *
@@ -45,8 +47,9 @@ export class SftpAdapter {
         sorting?: "None" | "Name" | "Size" | "Date";
     }): SftpAdapter {
         const adapterName = config.name || "SFTP";
+        const channelName = toXmlTechnicalName(adapterName, "SFTP_Sender");
         return new SftpAdapter(
-            adapterName,
+            channelName,
             "Sender",
             {
                 // EXACT property order with TEMPLATE PLACEHOLDERS matching POC export
@@ -55,8 +58,13 @@ export class SftpAdapter {
                 maximumFileSize: "40",
                 privateKeyAlias: "{{alias}}",
                 emptyFileHandling: "processFile",
+                // Was hardcoded to the literal "SFTP" regardless of config.name;
+                // now reflects the actual (sanitized) channel name for
+                // consistency with every other adapter -- SAP rejects
+                // whitespace in this "Name" property too, not just the
+                // channel name.
                 location_id: "",
-                Name: "SFTP",
+                Name: channelName,
                 TransportProtocolVersion: "1.20.1",
                 flatten: "0",
                 proxyPort: "8080",
@@ -122,11 +130,14 @@ export class SftpAdapter {
         createDirectory?: boolean;
     }): SftpAdapter {
         const adapterName = config.name || "SFTP Receiver";
+        const channelName = toXmlTechnicalName(adapterName, "SFTP_Receiver");
         return new SftpAdapter(
-            adapterName,
+            channelName,
             "Receiver",
             {
-                Name: adapterName,
+                // SAP rejects whitespace in this "Name" property too, not
+                // just the channel name -- use the same sanitized value.
+                Name: channelName,
                 Description: "",
                 host: config.host,
                 port: (config.port || 22).toString(),

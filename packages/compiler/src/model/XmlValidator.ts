@@ -53,6 +53,7 @@ export class XmlValidator extends Component {
      * @param preventException - If false (default), validation failure throws exception.
      *                           If true, validation continues with errors in headers.
      * @param additionalProperties - Optional additional SAP properties
+     * @param id - Optional component ID (auto-generated if not provided)
      *
      * Common properties:
      * - xmlSchemaSource: "iflowOption" (from resources) or "header" (from message header)
@@ -62,9 +63,12 @@ export class XmlValidator extends Component {
         name: string,
         xsdPath: string,
         preventException: boolean = false,
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        const id = `XmlValidator_${Date.now()}`;
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `XmlValidator_${Date.now()}`;
 
         const properties = {
             xmlSchemaSource: additionalProperties.xmlSchemaSource || "iflowOption",
@@ -74,7 +78,7 @@ export class XmlValidator extends Component {
             ...additionalProperties
         };
 
-        super(id, name, "XmlValidator", properties);
+        super(componentId, name, "XmlValidator", properties);
     }
 
     /**

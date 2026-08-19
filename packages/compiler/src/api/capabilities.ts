@@ -214,6 +214,23 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
             name: 'Call Data Lookup',
             processId: 'subprocess_id'
         }
+    },
+    'JdbcCall': {
+        required: ['dataSourceAlias'],
+        optional: {
+            'name': 'Display name for the component',
+            'system': 'Name of the receiver system shown in the collaboration diagram (defaults to name)',
+            'connectionTimeout': 'Connection Timeout, in seconds (default: 60)',
+            'queryTimeout': 'Query/Response Timeout, in seconds (default: 60)',
+            'maxRecords': 'Maximum Records to return (default: 100)',
+            'batchMode': 'Whether statements are executed as a batch (default: false)',
+            'batchOperation': '"atomic" or "notAtomic" (default: "atomic")'
+        },
+        example: {
+            name: 'Query Orders DB',
+            dataSourceAlias: 'ORDERS_DB'
+        },
+        notes: 'Mid-flow request-reply call to a database via JDBC (SAP CPI has no JDBC sender -- it is always called mid-flow, never used as the flow\'s sender). The SQL statement is NOT a property of this component: it is the message body at the time of the call. Always connect a preceding ContentModifier (with wrapContent set to the SQL) into this component. Multiple JdbcCall instances are supported in the same flow -- give each an explicit, unique "id" in the components array so results/errors can be traced back to a specific call. Unsupported properties are rejected, not silently ignored.'
     }
 };
 
@@ -380,7 +397,28 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 credentialName: 'S4_Creds'
             }
         }
-    }
+    },
+    'JDBC': {
+        // No 'Sender' entry: SAP CPI has no JDBC sender direction. Prefer
+        // the 'JdbcCall' component (mid-flow, supports multiple instances)
+        // over this flow-level receiver, which only covers a single JDBC
+        // call at the very end of the flow.
+        'Receiver': {
+            required: ['dataSourceAlias'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the receiver system shown in the collaboration diagram',
+                'connectionTimeout': 'Connection Timeout, in seconds (default: 60)',
+                'queryTimeout': 'Query/Response Timeout, in seconds (default: 60)',
+                'maxRecords': 'Maximum Records to return (default: 100)',
+                'batchMode': 'Whether statements are executed as a batch (default: false)',
+                'batchOperation': '"atomic" or "notAtomic" (default: "atomic")'
+            },
+            example: {
+                dataSourceAlias: 'ORDERS_DB'
+            }
+        }
+    } as any
 };
 
 /**
@@ -397,7 +435,8 @@ const REGISTRY_TO_TYPE: Record<string, ComponentType> = {
     'MessageMapping': 'MessageMapping',
     'XmlValidator': 'XmlValidator',
     'XSLTMapping': 'XsltMapping',
-    'ProcessCall': 'ProcessCall'
+    'ProcessCall': 'ProcessCall',
+    'JdbcCall': 'JdbcCall'
 };
 
 /**
@@ -437,7 +476,7 @@ export function getCapabilities(): Capabilities {
     // Build adapter capabilities
     const adapters: AdapterCapability[] = [];
 
-    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc'] as AdapterType[]) {
+    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC'] as AdapterType[]) {
         for (const direction of ['Sender', 'Receiver'] as AdapterDirection[]) {
             const requirements = ADAPTER_REQUIREMENTS[adapterType]?.[direction];
             if (!requirements) {

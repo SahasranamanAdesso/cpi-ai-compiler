@@ -1,3 +1,5 @@
+import { toXmlTechnicalName } from '../utils/XmlName';
+
 /**
  * ODataAdapter - OData adapter for SAP and external OData services
  *
@@ -100,6 +102,7 @@ export class ODataAdapter {
         const version = config.version || "V2";
         const protocolVersion = version === "V2" ? "1.30.1" : "1.0.0";
         const compVersion = version === "V2" ? "1.30" : "1.0";
+        const channelName = toXmlTechnicalName(config.name, "OData_Receiver");
 
         const properties: Record<string, any> = {
             address: config.address || "",
@@ -108,8 +111,10 @@ export class ODataAdapter {
             odataConnectionTimeout: config.timeout?.toString() || "60000",
             authenticationMethod: config.authentication || "None",
             credentialName: config.credentialName || "",
+            // SAP rejects whitespace in this "Name" property too, not just
+            // the channel name -- use the same sanitized value.
             system: "Receiver",
-            Name: config.name,
+            Name: channelName,
             Description: "",
             TransportProtocolVersion: protocolVersion,
             ComponentSWCVName: "external",
@@ -128,7 +133,7 @@ export class ODataAdapter {
         }
 
         return new ODataAdapter(
-            config.name,
+            channelName,
             "Receiver",
             version,
             properties
@@ -152,9 +157,10 @@ export class ODataAdapter {
         select?: string;
     }): ODataAdapter {
         const version = config.version || "V2";
+        const channelName = toXmlTechnicalName(config.name, "OData_Sender");
 
         return new ODataAdapter(
-            config.name,
+            channelName,
             "Sender",
             version,
             {
@@ -165,7 +171,11 @@ export class ODataAdapter {
                 credentialName: config.credentialName || "",
                 odataFilter: config.filter || "",
                 odataSelect: config.select || "",
+                // SAP rejects whitespace in this "Name" property too, not
+                // just the channel name -- use the same sanitized value.
                 system: "Sender",
+                Name: channelName,
+                Description: "",
                 MessageProtocolVersion: version === "V2" ? "1.30.1" : "1.0.0",
                 componentVersion: version === "V2" ? "1.30" : "1.0"
             }

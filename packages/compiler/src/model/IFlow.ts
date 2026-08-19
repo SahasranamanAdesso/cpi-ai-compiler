@@ -8,6 +8,7 @@ import { ODataAdapter } from "./ODataAdapter";
 import { SftpAdapter } from "./SftpAdapter";
 import { SoapAdapter } from "./SoapAdapter";
 import { IdocAdapter } from "./IdocAdapter";
+import { JdbcAdapter } from "./JdbcAdapter";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -56,13 +57,15 @@ export class IFlow {
 
     /**
      * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, etc.)
+     * Note: JdbcAdapter is receiver-only (no JDBC Sender exists in SAP CPI)
+     * and is intentionally excluded from this union.
      */
     private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
 
     /**
-     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, etc.)
+     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, etc.)
      */
-    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
+    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter;
 
     /**
      * Canonical ID mapping (AI ID → Component)
@@ -198,10 +201,10 @@ export class IFlow {
 
     /**
      * Sets the receiver adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, or IDoc receiver adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, or JDBC receiver adapter
      * @returns this IFlow instance for method chaining
      */
-    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter): IFlow {
+    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter): IFlow {
         this.receiver = adapter;
         return this;
     }
@@ -210,7 +213,7 @@ export class IFlow {
      * Gets the receiver adapter
      * @returns Receiver adapter or undefined
      */
-    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | undefined {
+    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | undefined {
         return this.receiver;
     }
 

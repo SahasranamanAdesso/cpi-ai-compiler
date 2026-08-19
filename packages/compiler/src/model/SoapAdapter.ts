@@ -1,3 +1,5 @@
+import { toXmlTechnicalName } from '../utils/XmlName';
+
 /**
  * SoapAdapter - SOAP 1.x adapter for web service calls
  *
@@ -65,9 +67,10 @@ export class SoapAdapter {
         locationId?: string;
     }): SoapAdapter {
         const soapVersion = config.soapVersion || "SOAP 1.1";
+        const channelName = toXmlTechnicalName(config.name, "SOAP_Receiver");
 
         return new SoapAdapter(
-            config.name,
+            channelName,
             "Receiver",
             {
                 url: config.url || "",
@@ -83,7 +86,11 @@ export class SoapAdapter {
                 KeepConnectionAlive: "0",
                 SourceForSapRmMessageId: "",
                 cleanupHeaders: "1",
+                // SAP rejects whitespace in this "Name" property too, not
+                // just the channel name -- use the same sanitized value.
                 system: "Receiver",
+                Name: channelName,
+                Description: "",
                 direction: "Receiver",
                 componentVersion: "1.10",
                 MessageProtocolVersion: "1.13.0",

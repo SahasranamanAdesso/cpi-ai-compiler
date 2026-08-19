@@ -58,14 +58,18 @@ export class XsltMapping extends Component {
      * Common properties:
      * - mappingSource: "mappingSrcIflow" (from resources) or "mappingSrcHeader" (from header)
      * - mappingHeaderNameKey: Header name containing stylesheet path (when mappingSource="mappingSrcHeader")
+     * @param id - Optional component ID (auto-generated if not provided)
      */
     constructor(
         name: string,
         stylesheetName: string,
         outputFormat: "Bytes" | "String" = "Bytes",
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        const id = `XsltMapping_${Date.now()}`;
+        // Use provided ID or generate unique ID (same pattern as
+        // ProcessCall/Router/GroovyScript -- see CP-001 fix history)
+        const componentId = id || `XsltMapping_${Date.now()}`;
 
         // Normalize stylesheet name (add .xsl if not present)
         const normalizedName = stylesheetName.endsWith('.xsl') || stylesheetName.endsWith('.xslt')
@@ -84,7 +88,7 @@ export class XsltMapping extends Component {
             ...additionalProperties
         };
 
-        super(id, name, "XSLTMapping", properties);
+        super(componentId, name, "XSLTMapping", properties);
     }
 
     /**
