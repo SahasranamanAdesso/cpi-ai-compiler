@@ -13,8 +13,25 @@ import { ComponentMapper } from "./ComponentMapper";
 import { Router } from "../model/Router";
 import { Multicast } from "../model/Multicast";
 import { JdbcCall } from "../model/JdbcCall";
+import { ProcessDirectCall } from "../model/ProcessDirectCall";
 import { IdGenerator } from "../utils/IdGenerator";
 import { ensureUniqueTechnicalName } from "../utils/XmlName";
+
+/**
+ * Structural shape shared by every mid-flow adapter-call component
+ * (JdbcCall, ProcessDirectCall, and any future one following the same
+ * pattern): a Component whose `.adapter` carries the messageFlow
+ * properties + cmdVariantUri for the companion participant/messageFlow
+ * BpmnProcessMapper generates alongside the serviceTask itself.
+ */
+interface MidFlowAdapterCall {
+    readonly id: string;
+    readonly name: string;
+    readonly adapter: {
+        readonly properties: Record<string, any>;
+        getCmdVariantUri(): string;
+    };
+}
 
 /**
  * BpmnProcessMapper - Maps entire IFlow to complete BpmnDefinitions
@@ -375,46 +392,21 @@ export class BpmnProcessMapper {
         }
         collaboration.addMessageFlow(receiverMessageFlow);
 
-        // Mid-flow adapter calls (currently: JDBC) each need their own
+        // Mid-flow adapter calls (JDBC, Process Direct) each need their own
         // receiver participant + messageFlow, in addition to whatever the
         // flow's single sender/receiver adapters already added above.
         // Unlike Router/Multicast (which only affect sequence flow metadata),
         // these components change the collaboration itself, so they're
-        // handled here rather than in ComponentMapper.
-        //
-        // Distinct ID prefixes ("Participant_Jdbc"/"MessageFlow_Jdbc") avoid
-        // colliding with the fixed "Participant_1"/"Participant_2"/
-        // "MessageFlow_4"/"MessageFlow_5" literals used above -- the same
-        // class of duplicate-ID bug fixed for ProcessCall (CP-001).
+        // handled here rather than in ComponentMapper. Shared across every
+        // mid-flow adapter-call type via mapMidFlowAdapterCall() so adding
+        // a new one (following this same JdbcCall/ProcessDirectCall pattern)
+        // never means copy-pasting this block again.
         components.forEach(component => {
-            if (!(component instanceof JdbcCall)) {
-                return;
+            if (component instanceof JdbcCall) {
+                this.mapMidFlowAdapterCall(component, "JDBC", "Jdbc", collaboration, usedChannelNames);
+            } else if (component instanceof ProcessDirectCall) {
+                this.mapMidFlowAdapterCall(component, "ProcessDirect", "ProcessDirect", collaboration, usedChannelNames);
             }
-
-            const participantId = IdGenerator.next("Participant_Jdbc");
-            const messageFlowId = IdGenerator.next("MessageFlow_Jdbc");
-            const adapter = component.adapter;
-
-            const jdbcParticipant = new BpmnParticipant(
-                participantId,
-                adapter.properties.system || component.name,
-                "EndpointRecevier"
-            );
-            jdbcParticipant.addProperty("ifl:type", "EndpointRecevier");
-            collaboration.addParticipant(jdbcParticipant);
-
-            const jdbcChannelName = ensureUniqueTechnicalName("JDBC", usedChannelNames);
-            const jdbcMessageFlow = new BpmnMessageFlow(
-                messageFlowId,
-                jdbcChannelName,
-                component.id,
-                participantId,
-                "Receiver",
-                "JDBC",
-                { ...adapter.properties }
-            );
-            jdbcMessageFlow.addProperty("cmdVariantUri", adapter.getCmdVariantUri());
-            collaboration.addMessageFlow(jdbcMessageFlow);
         });
 
         // Create BPMN Diagram with visual layout
@@ -423,6 +415,61 @@ export class BpmnProcessMapper {
         definitions.setDiagram(diagram);
 
         return definitions;
+    }
+
+    /**
+     * Generates the companion receiver participant + messageFlow for a
+     * mid-flow adapter-call component (JdbcCall, ProcessDirectCall, ...).
+     *
+     * Distinct ID prefixes per adapter type (e.g. "Participant_Jdbc" /
+     * "Participant_ProcessDirect") avoid colliding with the fixed
+     * "Participant_1"/"Participant_2"/"MessageFlow_4"/"MessageFlow_5"
+     * literals used for the flow's own sender/receiver, with each other
+     * across adapter types, and with ProcessCall/other component IDs --
+     * the same class of duplicate-ID bug fixed for ProcessCall (CP-001).
+     * `IdGenerator` guarantees no two calls (of the same or different type)
+     * ever produce the same participant/messageFlow id, and
+     * `ensureUniqueTechnicalName` guarantees no two channels share a name
+     * even when every instance defaults to the same literal channel name
+     * (e.g. two ProcessDirectCall steps both defaulting to "ProcessDirect").
+     *
+     * @param component - the mid-flow call component (JdbcCall, ProcessDirectCall)
+     * @param defaultChannelName - literal channel name evidence shows this
+     *        adapter type always uses (e.g. "JDBC", "ProcessDirect") when
+     *        not customized
+     * @param idPrefix - suffix for the "Participant_"/"MessageFlow_" id prefixes
+     */
+    private mapMidFlowAdapterCall(
+        component: MidFlowAdapterCall,
+        defaultChannelName: string,
+        idPrefix: string,
+        collaboration: BpmnCollaboration,
+        usedChannelNames: Set<string>
+    ): void {
+        const participantId = IdGenerator.next(`Participant_${idPrefix}`);
+        const messageFlowId = IdGenerator.next(`MessageFlow_${idPrefix}`);
+        const adapter = component.adapter;
+
+        const participant = new BpmnParticipant(
+            participantId,
+            adapter.properties.system || component.name,
+            "EndpointRecevier"
+        );
+        participant.addProperty("ifl:type", "EndpointRecevier");
+        collaboration.addParticipant(participant);
+
+        const channelName = ensureUniqueTechnicalName(defaultChannelName, usedChannelNames);
+        const messageFlow = new BpmnMessageFlow(
+            messageFlowId,
+            channelName,
+            component.id,
+            participantId,
+            "Receiver",
+            defaultChannelName,
+            { ...adapter.properties }
+        );
+        messageFlow.addProperty("cmdVariantUri", adapter.getCmdVariantUri());
+        collaboration.addMessageFlow(messageFlow);
     }
 
     /**

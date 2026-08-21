@@ -1,0 +1,253 @@
+# Commit 2: Process Direct adapter support
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as [`commit1_jdbc-support-and-naming-fixes.readme`](commit1_jdbc-support-and-naming-fixes.readme)
+— written for both future Claude sessions and human contributors, explaining
+the evidence and reasoning behind each decision, not just the diff.
+
+---
+
+## 1. What this commit adds: Process Direct support
+
+The compiler previously had no Process Direct adapter. This adds it,
+following the exact same evidence-based methodology as the JDBC work in
+commit 1 — a real SAP-exported Process Direct iFlow ZIP
+(`process_direct_reference.zip`, `.iflw`: *"Send Outbound Sales Order Status
+from S4HANA to OCE"*) was inspected first, cross-validated against a second,
+independent real export (the JDBC reference ZIP from commit 1, which also
+happens to contain a Process Direct **Receiver** usage) before writing any
+code.
+
+### Process Direct's dual nature (the key finding)
+
+Unlike JDBC (Receiver-only — a database can't push into CPI), the evidence
+shows Process Direct genuinely has **two independent usages** in real SAP
+flows:
+
+1. **Flow-level adapter, both directions.** `Participant_1` ("S4HANA",
+   `ifl:type="EndpointSender"`) → `MessageFlow_6` → `StartEvent_2`, i.e. a
+   normal Sender, wired exactly like HTTP/SOAP/SFTP/IDoc via
+   `flow.setSender()`/`setReceiver()`. Process Direct **can** be a Receiver
+   too (SAP-internal, in-memory, no network hop — used to call *another*
+   integration flow's start event directly).
+2. **Mid-flow call component, Receiver-direction only.** `ServiceTask_56`
+   ("RR_ErrorDetails", `activityType=ExternalCall` — structurally identical
+   to `JdbcCall`'s serviceTask) → `MessageFlow_59` → `Participant_58`
+   ("GlobalExceptionHandling", `ifl:type="EndpointRecevier"`). This is a
+   request-reply call to *another* iFlow from the middle of processing,
+   exactly the same shape as `JdbcCall`.
+
+Both usages were confirmed, not assumed — the second (mid-flow) shape is
+also present in the JDBC reference ZIP from commit 1 (`MessageFlow_61`,
+identical `cmdVariantUri`), which is what made it safe to treat as a stable
+pattern rather than a one-off.
+
+**A version asymmetry was also confirmed across both reference exports**:
+the Sender `cmdVariantUri` ends `.../version::1.1.2`, the Receiver ends
+`.../version::1.1.1` — a real, evidenced distinction, not a typo, so both
+are preserved exactly in `ProcessDirectAdapter.getCmdVariantUri()`.
+
+**New files**:
+- `src/model/ProcessDirectAdapter.ts` — the flow-level adapter
+  (`.sender()`/`.receiver()` factories), plus the shared property set
+  (`ComponentType=ProcessDirect`, `TransportProtocol`/`MessageProtocol=Not
+  Applicable`, `ComponentNS=sap`, `Vendor=SAP`, `componentVersion=1.1`,
+  `ComponentSWCVName=external`, `ComponentSWCVId=1.1.2`) taken verbatim from
+  the reference exports. Only `address` (required) and `system` (optional,
+  defaults to the display name) are accepted — confirmed against
+  `parameters.propdef` in the reference ZIP, which lists `address` as the
+  **only** externalizable Process Direct attribute.
+- `src/model/ProcessDirectCall.ts` — the mid-flow component, mirroring
+  `JdbcCall.ts` exactly: a `Component` subclass carrying a
+  `ProcessDirectAdapter` (always built via `.receiver()`, matching the
+  evidenced mid-flow direction).
+
+**Modified to wire it in**: `ComponentRegistry.ts` (`ProcessDirectCall`
+entry, identical `ExternalCall` flowstep metadata to `JdbcCall`),
+`ComponentFactory.ts` (`ProcessDirectCall` component type, `ProcessDirect`
+adapter type, both directions), `IFlow.ts` (`ProcessDirectAdapter` added to
+the `sender`/`receiver` field types — the one place its behavior differs
+from `JdbcAdapter`, which is receiver-only), `capabilities.ts`,
+`validate.ts`, `index.ts`.
+
+### Avoiding duplication with JDBC (`BpmnProcessMapper.ts`)
+
+The previous JDBC-only inline block in `BpmnProcessMapper.ts` (build the
+companion `EndpointRecevier` participant + messageFlow for every
+`JdbcCall`) was generalized into one shared private method,
+`mapMidFlowAdapterCall()`, parameterized by a default channel name and an ID
+prefix, and keyed off a small structural interface (`MidFlowAdapterCall`)
+rather than a common base class:
+
+```typescript
+components.forEach(component => {
+    if (component instanceof JdbcCall) {
+        this.mapMidFlowAdapterCall(component, "JDBC", "Jdbc", collaboration, usedChannelNames);
+    } else if (component instanceof ProcessDirectCall) {
+        this.mapMidFlowAdapterCall(component, "ProcessDirect", "ProcessDirect", collaboration, usedChannelNames);
+    }
+});
+```
+
+This was a deliberate choice to satisfy "do not duplicate existing
+writer/mapper logic" — any future mid-flow adapter-call type (a third one
+would need evidence first) can reuse the same method. Diagram/shape
+positioning (`createDiagram()`) needed **no changes** — it already
+generically handles any extra participant/messageFlow pair via its existing
+mid-flow-adapter stacking logic.
+
+---
+
+## 2. ID collision safety (the recurring risk area)
+
+Given the prior `CP-001` duplicate-ID history with `ProcessCall` (fixed in
+commit 1), Process Direct's ID generation was built to be collision-safe
+from the start, using a **distinct prefix** from every other ID space:
+
+- `IdGenerator.next("Participant_ProcessDirect")` /
+  `IdGenerator.next("MessageFlow_ProcessDirect")` — distinct from JDBC's
+  `_Jdbc` prefix, from the fixed literals (`Participant_1`/`Participant_2`),
+  and from `ProcessCall`'s own `Component.id` space (a completely separate
+  ID axis).
+- Component IDs (AI-supplied or generated) go through the same
+  `ComponentFactory.resolveComponentId()` path as every other component
+  type — no special-casing needed.
+- Channel names go through the same `ensureUniqueTechnicalName()` dedup as
+  every other adapter, against the same shared `usedChannelNames` set — so
+  a flow with **both** a flow-level Process Direct adapter and a mid-flow
+  `ProcessDirectCall` correctly gets `"ProcessDirect"` and
+  `"ProcessDirect_2"`, not a collision.
+
+Verified directly (not just asserted) in `test-processdirect-regression.ts`:
+- 2 `ProcessDirectCall` instances in one flow → 0 `CP-001` errors, 2 unique
+  `serviceTask` ids, 2 unique `messageFlow` ids, 2 unique participant
+  targets, deduped channel names.
+- 3 `ProcessCall` + 2 `ProcessDirectCall` instances mixed in one flow → 0
+  duplicate IDs across all 49 BPMN element ids in the generated `.iflw`.
+- `JdbcCall` + `ProcessDirectCall` in the same flow → exactly one `JDBC` and
+  one `ProcessDirect` messageFlow, non-colliding ids.
+
+---
+
+## 3. Validation hardening (`AD-009`)
+
+Added to `src/api/validate.ts`, following the same pattern as `AD-006`/
+`AD-008` from commit 1:
+
+- **`AD-009`** — Process Direct `address` must be a relative path beginning
+  with `/`, checked in **both** directions (unlike `AD-006`, which is
+  Sender-only for HTTP). Runs against the actual `ProcessDirectAdapter`
+  instance produced by `fromJson()`, including the mid-flow `ProcessDirectCall`
+  case (which, like `JdbcCall`, isn't visible via `getSender()`/`getReceiver()`
+  and needs its own check in the component loop).
+- `KNOWN_ADAPTER_VERSIONS` extended: `'ProcessDirect': { Sender: '1.1',
+  Receiver: '1.1' }`.
+
+Addresses without a leading `/` are **normalized** (a `/` is prepended), not
+rejected — this matches the existing convention for HTTP(S) sender
+addresses and is intentional, confirmed by a passing regression test rather
+than left as an assumption.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `src/model/ProcessDirectAdapter.ts`
+- `src/model/ProcessDirectCall.ts`
+- `test-processdirect-regression.ts`
+
+**Modified**:
+- `src/api/capabilities.ts`, `src/api/validate.ts`
+- `src/factory/ComponentFactory.ts`
+- `src/index.ts`
+- `src/mapper/BpmnProcessMapper.ts` (JDBC-only mid-flow block generalized
+  into a shared `mapMidFlowAdapterCall()` method, used by both `JdbcCall`
+  and `ProcessDirectCall` — verified not to change JDBC's own generated
+  output via the full commit-1 regression suite)
+- `src/model/IFlow.ts` (`ProcessDirectAdapter` added to `sender`/`receiver`
+  field types)
+- `src/registry/ComponentRegistry.ts` (`ProcessDirectCall` entry)
+
+**Deliberately not touched**: writers (`ServiceTaskWriter.ts` from commit 1
+already handles the `ProcessDirectCall` serviceTask — no new writer type was
+needed, since both `JdbcCall` and `ProcessDirectCall` compile to the same
+`ExternalCall` flowstep shape), the BPMN IR, packaging logic, existing
+resource handling (Process Direct has no resources of its own — confirmed
+by `parameters.propdef` showing only `address`), the Fiori UI, the CAP
+service layer, and the root-level `src/` mirror (same reasoning as commit
+1 — see `COMPILER_PACKAGE_MIGRATION.md`).
+
+---
+
+## 5. Testing
+
+`test-processdirect-regression.ts` (plain `ts-node` script, same convention
+as commit 1's suites), 13 scenario groups, all passing:
+
+1. `getCapabilities()` exposes `ProcessDirectCall` (component) and
+   `ProcessDirect` (adapter, both directions).
+2. Process Direct as a flow-level Sender **and** Receiver — validated,
+   compiled, and the raw `.iflw` inspected directly for correct
+   `cmdVariantUri` version asymmetry (`1.1.2` Sender / `1.1.1` Receiver).
+3. Single mid-flow `ProcessDirectCall` + `ContentModifier` — raw `.iflw`
+   inspected for `serviceTask`/`ExternalCall`, messageFlow property set,
+   `EndpointRecevier` participant, valid NCName channel name.
+4. Two `ProcessDirectCall` instances — no duplicate ids anywhere, deduped
+   channel names.
+5. `Router` routing to two different `ProcessDirectCall` targets.
+6. `ProcessDirectCall` + `ProcessCall` coexistence.
+7. `ProcessDirectCall` + `JdbcCall` coexistence.
+8. Mixed 3×`ProcessCall` + 2×`ProcessDirectCall` stress test (0 duplicate
+   ids across 49 total BPMN element ids).
+9. Missing `address` rejected.
+10. Unsupported property (e.g. `timeout`) rejected.
+11. Address without leading `/` is normalized, not rejected (documented
+    behavior, matches HTTP convention).
+
+Every structural claim above was checked against the **raw generated
+`.iflw` XML**, not just `validate()`'s return value, and cross-checked
+property-by-property against the reference ZIP evidence quoted in §1 —
+same standard as commit 1.
+
+**Full pre-existing regression suite re-run after this change — zero
+regressions**:
+- `test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+  `test-naming-version-regression.ts`, `test-customer-flow-regression.ts`
+  (all from commit 1 — specifically re-verified because
+  `BpmnProcessMapper.ts`'s JDBC code path was refactored, not just added
+  to, in this commit).
+- `test/run-rt-003-tests.ts` (9/9), `test/run-mapping-regression-simple.ts`
+  (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Known limitations
+
+- The flow-level Sender/Receiver participant is always named generically
+  "Sender"/"Receiver" rather than using the configured `system` name for
+  the participant label. This is pre-existing behavior shared by **every**
+  adapter type (not Process-Direct-specific) and was intentionally left
+  unchanged — the reference export's `Participant_1` is named "S4HANA", but
+  changing participant naming for all adapters is outside this task's scope
+  and has no evidence pinning down whether it should apply universally.
+- `componentVersion=1.1` / `ComponentSWCVId=1.1.2` are pinned to the
+  reference export evidence in this repo, same caveat as JDBC's version in
+  commit 1 — a newer tenant profile would need a fresh export to confirm,
+  not a guess.
+- No new resource type was introduced for Process Direct (none needed per
+  evidence), but if a future real export shows one, it should be verified
+  the same way before being added.

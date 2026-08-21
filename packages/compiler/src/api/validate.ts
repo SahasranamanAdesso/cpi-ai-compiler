@@ -7,6 +7,7 @@
 import { IFlow } from '../model/IFlow';
 import { Router } from '../model/Router';
 import { JdbcCall } from '../model/JdbcCall';
+import { ProcessDirectCall } from '../model/ProcessDirectCall';
 import { isValidXmlNCName } from '../utils/XmlName';
 
 /**
@@ -21,16 +22,20 @@ import { isValidXmlNCName } from '../utils/XmlName';
  *     export evidence), not 1.5/1.20.
  *   - JDBC Receiver is version 1.5, matching the reference JDBC export this
  *     compiler was built against.
+ *   - Process Direct is version 1.1 for BOTH directions (two independent
+ *     real exports agree) -- unlike JDBC/HTTP(S), Process Direct genuinely
+ *     supports both Sender and Receiver.
  *
- * Deliberately scoped to just these two adapters (not SOAP/SFTP/IDoc/OData)
- * -- this compiler has no reference evidence contradicting those adapters'
+ * Deliberately scoped to just these adapters (not SOAP/SFTP/IDoc/OData) --
+ * this compiler has no reference evidence contradicting those adapters'
  * current versions, and "do not guess the XML structure" applies equally to
  * validation rules as it does to generation code.
  */
 const KNOWN_ADAPTER_VERSIONS: Record<string, Partial<Record<'Sender' | 'Receiver', string>>> = {
     'HTTPS': { Sender: '1.5' },
     'HTTP': { Receiver: '1.16' },
-    'JDBC': { Receiver: '1.5' }
+    'JDBC': { Receiver: '1.5' },
+    'ProcessDirect': { Sender: '1.1', Receiver: '1.1' }
 };
 
 /**
@@ -68,6 +73,22 @@ function checkAdapterOutput(adapter: any, direction: 'Sender' | 'Receiver', labe
                 severity: 'error',
                 code: 'AD-006',
                 message: `${label} HTTP(S) address must be a relative path beginning with "/" (got: ${JSON.stringify(address)})`
+            });
+        }
+    }
+
+    // AD-009: Process Direct `address` must be a relative path beginning
+    // with "/" -- required in BOTH directions (it's a pure routing key with
+    // no host/scheme, and must match the target flow's Sender address
+    // exactly). ProcessDirectAdapter already enforces this at construction
+    // time, so this is a regression guard, same rationale as NM-001.
+    if (componentType === 'ProcessDirect') {
+        const address = adapter.properties?.address;
+        if (typeof address !== 'string' || address.trim().length === 0 || !address.startsWith('/')) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-009',
+                message: `${label} Process Direct address must be a relative path beginning with "/" (got: ${JSON.stringify(address)})`
             });
         }
     }
@@ -234,11 +255,14 @@ export function validate(flow: IFlow): ValidationResult {
             });
         }
 
-        // NM-001/AD-007: mid-flow JDBC calls carry their own adapter (a
-        // separate messageFlow, not part of flow.getSender()/getReceiver()),
-        // so it needs the same check applied here.
+        // NM-001/AD-007/AD-009: mid-flow adapter calls carry their own
+        // adapter (a separate messageFlow, not part of
+        // flow.getSender()/getReceiver()), so they need the same check
+        // applied here.
         if (component instanceof JdbcCall) {
             checkAdapterOutput(component.adapter, 'Receiver', `JdbcCall "${component.id}"`, errors);
+        } else if (component instanceof ProcessDirectCall) {
+            checkAdapterOutput(component.adapter, 'Receiver', `ProcessDirectCall "${component.id}"`, errors);
         }
 
         // RT-002: Router must have at least 2 routes

@@ -63,6 +63,7 @@ export { XsltMapping } from './model/XsltMapping';
 export { XsltResource } from './model/XsltResource';
 export { ProcessCall } from './model/ProcessCall';
 export { JdbcCall } from './model/JdbcCall';
+export { ProcessDirectCall } from './model/ProcessDirectCall';
 export { LocalIntegrationProcess } from './model/LocalIntegrationProcess';
 export { ExceptionSubprocess } from './model/ExceptionSubprocess';
 export { HttpAdapter } from './model/HttpAdapter';
@@ -71,6 +72,7 @@ export { SftpAdapter } from './model/SftpAdapter';
 export { SoapAdapter } from './model/SoapAdapter';
 export { IdocAdapter } from './model/IdocAdapter';
 export { JdbcAdapter } from './model/JdbcAdapter';
+export { ProcessDirectAdapter } from './model/ProcessDirectAdapter';
 
 // ============================================================================
 // PUBLIC API - Mapper Layer

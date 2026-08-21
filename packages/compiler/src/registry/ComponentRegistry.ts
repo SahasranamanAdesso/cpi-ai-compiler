@@ -582,6 +582,32 @@ export const ComponentRegistry: Record<string, ComponentDefinition> = {
             componentVersion: "1.0",
             defaultProperties: {}
         }
+    },
+
+    /**
+     * Process Direct Call (mid-flow request-reply call to another iFlow)
+     * BPMN: <serviceTask activityType="ExternalCall">
+     *
+     * Evidence Source:
+     * - "Send Outbound Sales Order Status from S4HANA to OCE.iflw",
+     *   ServiceTask_56 "RR_ErrorDetails" (see model/ProcessDirectCall.ts and
+     *   model/ProcessDirectAdapter.ts for the full evidence trail, including
+     *   the paired ProcessDirect messageFlow)
+     *
+     * Identical serviceTask metadata to JdbcCall -- both are SAP's generic
+     * "ExternalCall" flowstep; the adapter-specific configuration lives on
+     * the paired messageFlow instead (see ProcessDirectCall.adapter).
+     */
+    ProcessDirectCall: {
+        displayName: "Process Direct Call",
+        bpmnElement: "serviceTask",
+        activityType: "ExternalCall",
+        metadata: {
+            activityType: "ExternalCall",
+            cmdVariantUri: "ctype::FlowstepVariant/cname::ExternalCall/version::1.0.4",
+            componentVersion: "1.0",
+            defaultProperties: {}
+        }
     }
 
 };

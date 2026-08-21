@@ -25,6 +25,8 @@ import { SoapAdapter } from '../model/SoapAdapter';
 import { IdocAdapter } from '../model/IdocAdapter';
 import { JdbcAdapter } from '../model/JdbcAdapter';
 import { JdbcCall } from '../model/JdbcCall';
+import { ProcessDirectAdapter } from '../model/ProcessDirectAdapter';
+import { ProcessDirectCall } from '../model/ProcessDirectCall';
 import { Router } from '../model/Router';
 import { GroovyScript } from '../model/GroovyScript';
 import { DataStore } from '../model/DataStore';
@@ -117,7 +119,8 @@ export type ComponentType =
     | 'XmlValidator'
     | 'XsltMapping'
     | 'ProcessCall'
-    | 'JdbcCall';
+    | 'JdbcCall'
+    | 'ProcessDirectCall';
 
 /**
  * Supported adapter types
@@ -129,7 +132,8 @@ export type AdapterType =
     | 'SFTP'
     | 'SOAP'
     | 'IDoc'
-    | 'JDBC';
+    | 'JDBC'
+    | 'ProcessDirect';
 
 /**
  * Adapter direction
@@ -444,6 +448,19 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             return new JdbcCall(componentName, adapter, id);
         }
 
+        case 'ProcessDirectCall': {
+            if (!config.address) {
+                throw new Error('ProcessDirectCall requires address property');
+            }
+            // ProcessDirectAdapter.receiver validates the property set itself
+            // (unknown properties throw) -- pass everything through as-is.
+            const adapter = ProcessDirectAdapter.receiver({
+                name: componentName,
+                ...properties
+            } as any);
+            return new ProcessDirectCall(componentName, adapter, id);
+        }
+
         default:
             throw new Error(`Unsupported component type: ${type}`);
     }
@@ -483,7 +500,7 @@ export function createAdapter(
     type: AdapterType,
     direction: AdapterDirection,
     config: AdapterConfig
-): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter {
+): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter {
     // Normalize config (convert Markdown URLs to plain URLs)
     const normalizedConfig = normalizeConfig(config);
 
@@ -644,6 +661,20 @@ export function createAdapter(
                 maxRecords: normalizedConfig.maxRecords,
                 batchMode: normalizedConfig.batchMode,
                 batchOperation: normalizedConfig.batchOperation
+            });
+
+        case 'ProcessDirect':
+            if (direction === 'Sender') {
+                return ProcessDirectAdapter.sender({
+                    name: normalizedConfig.name,
+                    address: normalizedConfig.address,
+                    system: normalizedConfig.system
+                });
+            }
+            return ProcessDirectAdapter.receiver({
+                name: normalizedConfig.name,
+                address: normalizedConfig.address,
+                system: normalizedConfig.system
             });
 
         default:

@@ -9,6 +9,7 @@ import { SftpAdapter } from "./SftpAdapter";
 import { SoapAdapter } from "./SoapAdapter";
 import { IdocAdapter } from "./IdocAdapter";
 import { JdbcAdapter } from "./JdbcAdapter";
+import { ProcessDirectAdapter } from "./ProcessDirectAdapter";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -56,16 +57,16 @@ export class IFlow {
     private readonly exceptionSubprocesses: ExceptionSubprocess[] = [];
 
     /**
-     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, etc.)
+     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, Process Direct, etc.)
      * Note: JdbcAdapter is receiver-only (no JDBC Sender exists in SAP CPI)
      * and is intentionally excluded from this union.
      */
-    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter;
+    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter;
 
     /**
-     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, etc.)
+     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, etc.)
      */
-    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter;
+    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter;
 
     /**
      * Canonical ID mapping (AI ID → Component)
@@ -183,10 +184,10 @@ export class IFlow {
 
     /**
      * Sets the sender adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, or IDoc sender adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, or Process Direct sender adapter
      * @returns this IFlow instance for method chaining
      */
-    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter): IFlow {
+    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter): IFlow {
         this.sender = adapter;
         return this;
     }
@@ -195,16 +196,16 @@ export class IFlow {
      * Gets the sender adapter
      * @returns Sender adapter or undefined
      */
-    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | undefined {
+    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | undefined {
         return this.sender;
     }
 
     /**
      * Sets the receiver adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, or JDBC receiver adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, JDBC, or Process Direct receiver adapter
      * @returns this IFlow instance for method chaining
      */
-    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter): IFlow {
+    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter): IFlow {
         this.receiver = adapter;
         return this;
     }
@@ -213,7 +214,7 @@ export class IFlow {
      * Gets the receiver adapter
      * @returns Receiver adapter or undefined
      */
-    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | undefined {
+    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | undefined {
         return this.receiver;
     }
 

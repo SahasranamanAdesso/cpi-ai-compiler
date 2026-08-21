@@ -231,6 +231,18 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
             dataSourceAlias: 'ORDERS_DB'
         },
         notes: 'Mid-flow request-reply call to a database via JDBC (SAP CPI has no JDBC sender -- it is always called mid-flow, never used as the flow\'s sender). The SQL statement is NOT a property of this component: it is the message body at the time of the call. Always connect a preceding ContentModifier (with wrapContent set to the SQL) into this component. Multiple JdbcCall instances are supported in the same flow -- give each an explicit, unique "id" in the components array so results/errors can be traced back to a specific call. Unsupported properties are rejected, not silently ignored.'
+    },
+    'ProcessDirectCall': {
+        required: ['address'],
+        optional: {
+            'name': 'Display name for the component',
+            'system': 'Name of the connected system shown in the collaboration diagram (defaults to name)'
+        },
+        example: {
+            name: 'Call Domestic Order Flow',
+            address: '/process/domestic-orders'
+        },
+        notes: 'Mid-flow request-reply call to ANOTHER integration flow via the Process Direct adapter (in-memory, same tenant, no network hop) -- the target flow must expose a matching Process Direct Sender at the same "address". Unlike JdbcCall, this has no query/body requirement: the current message is simply passed to the target flow, and processing continues with whatever it returns. `address` must be a relative path beginning with "/" (e.g. "/process/domestic-orders") and must match the target flow\'s Process Direct Sender address exactly. Multiple ProcessDirectCall instances are supported in the same flow -- give each an explicit, unique "id". Unsupported properties are rejected, not silently ignored.'
     }
 };
 
@@ -418,7 +430,34 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 dataSourceAlias: 'ORDERS_DB'
             }
         }
-    } as any
+    } as any,
+    'ProcessDirect': {
+        // Unlike JDBC, Process Direct genuinely has both directions in real
+        // SAP exports: Sender exposes this flow to be called by another
+        // flow; Receiver calls out to another flow. Prefer the
+        // 'ProcessDirectCall' component for the mid-flow, multi-instance
+        // Receiver case -- this flow-level entry only covers a single call.
+        'Sender': {
+            required: ['address'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the connected system shown in the collaboration diagram'
+            },
+            example: {
+                address: '/process/orders'
+            }
+        },
+        'Receiver': {
+            required: ['address'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the connected system shown in the collaboration diagram'
+            },
+            example: {
+                address: '/process/orders'
+            }
+        }
+    }
 };
 
 /**
@@ -436,7 +475,8 @@ const REGISTRY_TO_TYPE: Record<string, ComponentType> = {
     'XmlValidator': 'XmlValidator',
     'XSLTMapping': 'XsltMapping',
     'ProcessCall': 'ProcessCall',
-    'JdbcCall': 'JdbcCall'
+    'JdbcCall': 'JdbcCall',
+    'ProcessDirectCall': 'ProcessDirectCall'
 };
 
 /**
@@ -476,7 +516,7 @@ export function getCapabilities(): Capabilities {
     // Build adapter capabilities
     const adapters: AdapterCapability[] = [];
 
-    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC'] as AdapterType[]) {
+    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect'] as AdapterType[]) {
         for (const direction of ['Sender', 'Receiver'] as AdapterDirection[]) {
             const requirements = ADAPTER_REQUIREMENTS[adapterType]?.[direction];
             if (!requirements) {
