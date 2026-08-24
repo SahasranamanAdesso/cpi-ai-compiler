@@ -27,6 +27,7 @@ import { JdbcAdapter } from '../model/JdbcAdapter';
 import { JdbcCall } from '../model/JdbcCall';
 import { ProcessDirectAdapter } from '../model/ProcessDirectAdapter';
 import { ProcessDirectCall } from '../model/ProcessDirectCall';
+import { RfcAdapter } from '../model/RfcAdapter';
 import { Router } from '../model/Router';
 import { GroovyScript } from '../model/GroovyScript';
 import { DataStore } from '../model/DataStore';
@@ -194,7 +195,8 @@ export type AdapterType =
     | 'SOAP'
     | 'IDoc'
     | 'JDBC'
-    | 'ProcessDirect';
+    | 'ProcessDirect'
+    | 'RFC';
 
 /**
  * Adapter direction
@@ -611,7 +613,7 @@ export function createAdapter(
     type: AdapterType,
     direction: AdapterDirection,
     config: AdapterConfig
-): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter {
+): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter {
     // Normalize config (convert Markdown URLs to plain URLs)
     const normalizedConfig = normalizeConfig(config);
 
@@ -787,6 +789,20 @@ export function createAdapter(
                 address: normalizedConfig.address,
                 system: normalizedConfig.system
             });
+
+        case 'RFC':
+            if (direction === 'Sender') {
+                throw new Error('RFC adapter does not support Sender direction (SAP CPI has no RFC sender -- RFC is always an outbound call from CPI into an SAP system)');
+            }
+            // Unlike the other flow-level adapter cases above (which
+            // enumerate known config fields only), this spreads the full
+            // config through: RFC has no mid-flow call component to catch
+            // an unsupported property the way JdbcCall/ProcessDirectCall do
+            // for their adapters, so this is the only place a typo'd or
+            // invented RFC property can be rejected end-to-end via
+            // fromJson() rather than silently dropped. RfcAdapter.receiver()
+            // itself throws on any key outside its documented set.
+            return RfcAdapter.receiver({ ...normalizedConfig } as any);
 
         default:
             throw new Error(`Unsupported adapter type: ${type}`);

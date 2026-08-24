@@ -459,7 +459,24 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 address: '/process/orders'
             }
         }
-    }
+    },
+    'RFC': {
+        // No 'Sender' entry: SAP CPI has no RFC sender direction -- RFC is
+        // always a synchronous, outbound-only call from Cloud Integration
+        // into an SAP system's remote-enabled function module.
+        'Receiver': {
+            required: ['destination'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the receiver system shown in the collaboration diagram (defaults to name)',
+                'transactioncommit': 'Whether to send a confirm transaction (SAP UI label: "Send Confirm Transaction", default: false)',
+                'newConnection': 'Whether to always create a new RFC connection (SAP UI label: "Create New Connection", default: false)'
+            },
+            example: {
+                destination: 'S4_RFC_DEST'
+            }
+        }
+    } as any
 };
 
 /**
@@ -518,7 +535,7 @@ export function getCapabilities(): Capabilities {
     // Build adapter capabilities
     const adapters: AdapterCapability[] = [];
 
-    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect'] as AdapterType[]) {
+    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect', 'RFC'] as AdapterType[]) {
         for (const direction of ['Sender', 'Receiver'] as AdapterDirection[]) {
             const requirements = ADAPTER_REQUIREMENTS[adapterType]?.[direction];
             if (!requirements) {

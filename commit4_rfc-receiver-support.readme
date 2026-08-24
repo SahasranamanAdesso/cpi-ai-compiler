@@ -1,0 +1,230 @@
+# Commit 4: RFC receiver adapter support
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as [`commit1_jdbc-support-and-naming-fixes.readme`](commit1_jdbc-support-and-naming-fixes.readme),
+[`commit2_process-direct-support.readme`](commit2_process-direct-support.readme), and
+[`commit3_local-integration-process-fix.readme`](commit3_local-integration-process-fix.readme) --
+written for both future Claude sessions and human contributors, explaining
+the evidence and reasoning behind each decision.
+
+---
+
+## 1. What this commit adds: RFC receiver support
+
+The compiler previously had no RFC adapter. This adds it, following the
+exact same evidence-based methodology as JDBC/Process Direct -- a real
+SAP-exported RFC iFlow ZIP (`rfc_reference.zip`, `.iflw`: *"Send Quality
+Deviation from D3 to S4HANA"*) was inspected first, before writing any code.
+
+### RFC's shape (determined from evidence, not assumed)
+
+Unlike JDBC/Process Direct (which are also used as **mid-flow** calls via a
+dedicated `JdbcCall`/`ProcessDirectCall` component), the reference export's
+RFC messageFlow (`MessageFlow_6`) has `sourceRef="EndEvent_2"
+targetRef="Participant_2"` -- the exact same shape every other **flow-level**
+receiver adapter in this compiler uses (HTTP, SOAP, SFTP, IDoc). RFC is
+**Receiver-only** (SAP CPI has no RFC Sender -- RFC is always a synchronous,
+outbound-only call from Cloud Integration into an SAP system's
+remote-enabled function module), so it slots directly into the existing
+`receiver: { type: "RFC", config: {...} }` mechanism with no new component
+type and no new writer.
+
+**New file**: `src/model/RfcAdapter.ts` -- mirrors `JdbcAdapter.ts`'s exact
+structure (a `.receiver()` static factory, a fixed base property set, a
+`SUPPORTED_RECEIVER_KEYS` allowlist that throws on anything else). Property
+set taken verbatim from the reference export:
+
+```
+ComponentType=RFC, TransportProtocol=RFC, MessageProtocol=Synchronous RFC,
+ComponentNS=sap, ComponentSWCVName=external, ComponentSWCVId=1.2.1,
+componentVersion=1.2, TransportProtocolVersion=1.2.1, MessageProtocolVersion=1.2.1,
+direction=Receiver
+cmdVariantUri=ctype::AdapterVariant/cname::sap:RFC/tp::RFC/mp::Synchronous RFC/direction::Receiver/version::1.2.1
+```
+
+Confirmed **absent** from every RFC property block in the export: `Vendor`
+(present on JDBC/Process Direct, but genuinely not on RFC -- checked, not
+omitted by oversight).
+
+`parameters.propdef`'s `param_references` confirm the RFC adapter has
+**exactly three** externalizable attributes, all under
+`ctype::AdapterVariant/cname::sap:RFC/tp::RFC/mp::Synchronous RFC/direction::Receiver/version::1.2.1`:
+
+| SAP property | UI label | Type | Notes |
+|---|---|---|---|
+| `destination` | "Destination" | `xsd:string` | required by this compiler (an RFC step is meaningless without a destination) |
+| `transactioncommit` | "Send Confirm Transaction" | `xsd:boolean` | optional per `isRequired=false`; defaults to `false` |
+| `newConnection` | "Create New Connection" | `xsd:boolean` | optional per `isRequired=false`; defaults to `false` |
+
+No other RFC property is evidenced anywhere in this export, so no other
+property is accepted. The two boolean defaults are this compiler's own "off
+unless asked for" convention (matching `JdbcAdapter.batchMode`'s existing
+default) -- the export happens to have both set to `true`, but nothing in
+the evidence indicates what SAP's own unconfigured default is, so `false`
+is not presented as an evidenced SAP default, only as this compiler's
+sensible choice.
+
+---
+
+## 2. Wiring (same touchpoints as every other flow-level adapter)
+
+- `IFlow.ts` -- `RfcAdapter` added to the `receiver` field's type union only
+  (not `sender`'s), mirroring how `JdbcAdapter` is receiver-only there too.
+- `ComponentFactory.ts` -- `'RFC'` added to `AdapterType`; `createAdapter()`
+  throws on `Sender` direction, else calls `RfcAdapter.receiver()`.
+- `capabilities.ts` -- `'RFC'` adapter capability (Receiver only, matching
+  the JDBC entry's `as any`-cast, no-Sender-key shape exactly), added to the
+  adapter-type discovery loop.
+- `index.ts` -- exports `RfcAdapter`.
+
+### One deliberate deviation from the JDBC/Process Direct precedent
+
+Every other flow-level adapter case in `createAdapter()` (HTTP, OData, SFTP,
+SOAP, IDoc, JDBC, Process Direct) forwards only a fixed, explicitly-named
+set of config fields into its adapter class's `.receiver()`/`.sender()`
+call -- so an extra, unsupported property in `receiver.config` is silently
+dropped before it ever reaches the adapter class's own rejection check.
+This is invisible for JDBC/Process Direct because their "reject unsupported
+properties" regression coverage goes through `JdbcCall`/`ProcessDirectCall`
+(mid-flow **components**, which spread `...properties` in full) rather than
+their flow-level receiver path. RFC has no such mid-flow component, so this
+gap would have made "reject unsupported RFC properties" untestable and
+unenforceable end-to-end via `fromJson()`. Fixed *for RFC only* by spreading
+the full normalized config into `RfcAdapter.receiver()` instead of
+enumerating fields -- `RfcAdapter`'s own small, fixed key allowlist still
+governs what's actually accepted, this only changes how much of the input
+reaches that check. No other adapter's `createAdapter()` case was touched.
+
+---
+
+## 3. Validation hardening (`validate.ts`)
+
+- `KNOWN_ADAPTER_VERSIONS` extended: `'RFC': { Receiver: '1.2' }`.
+- **AD-010** -- RFC `destination` must be a non-empty string, checked
+  against the actual generated adapter output (not just the AI JSON),
+  following the exact same regression-guard rationale as AD-006/AD-009
+  (`RfcAdapter` already enforces this at construction time; this catches a
+  future regression before it reaches SAP).
+
+`checkAdapterOutput()` already runs against `flow.getReceiver()`
+generically, so RFC gets NM-001 (channel name NCName) and AD-007
+(component-version allowlist) checks for free, with no new call site
+needed.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `src/model/RfcAdapter.ts`
+- `test-rfc-regression.ts`
+
+**Modified**:
+- `src/model/IFlow.ts` (`RfcAdapter` added to the `receiver` type union)
+- `src/factory/ComponentFactory.ts` (`'RFC'` adapter type, `createAdapter()`
+  case)
+- `src/api/capabilities.ts` (`'RFC'` adapter capability entry, added to the
+  discovery loop)
+- `src/api/validate.ts` (AD-010, `KNOWN_ADAPTER_VERSIONS` entry)
+- `src/index.ts` (`RfcAdapter` export)
+
+**Deliberately not touched**: no new writer was needed (RFC compiles to the
+exact same `<bpmn2:messageFlow>` shape every flow-level receiver adapter
+already uses via the existing collaboration-writer path), no new component
+model (RFC is an adapter, not a mid-flow call, per evidence), the BPMN IR,
+packaging logic, existing resource handling, JDBC/Process Direct/Local
+Integration Process/ProcessCall, and every other adapter/component type.
+
+---
+
+## 5. Testing
+
+`test-rfc-regression.ts` (same `ts-node` convention as commits 1-3), 9
+scenario groups, all passing, checked against the raw generated `.iflw` XML:
+
+1. `getCapabilities()` exposes RFC Receiver (and explicitly confirms no RFC
+   Sender is exposed).
+2. RFC as the flow's own receiver -- raw `.iflw` inspected for the exact
+   evidenced property set/values, the exact `cmdVariantUri`, the confirmed
+   *absence* of `Vendor`, and the `false` defaults for both booleans.
+3. RFC + `ContentModifier` (validate/transform before the RFC call) --
+   confirms explicit `true` values for `transactioncommit`/`newConnection`
+   are honored when configured.
+4. Missing `destination` rejected.
+5. Unsupported property (e.g. `functionModule`) rejected end-to-end via
+   `fromJson()` (this is the scenario the `createAdapter()` spread fix in
+   §2 makes possible).
+6. RFC used as a `Sender` rejected with a clear error.
+
+Also directly regenerated the task's example scenario end-to-end
+("Receive invoices ... validate ... transform ... send to SAP S/4HANA using
+RFC") and confirmed the output messageFlow matches the reference export
+property-for-property, and that the packaged XSD resource lands at
+`xsd/InvoiceSchema.xsd` (no doubled `xsd/xsd/` path).
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`, `test-localintegrationprocess-regression.ts`,
+`test/run-rt-003-tests.ts` (9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Example generic JSON
+
+```json
+{
+  "name": "Invoice to S4HANA via RFC",
+  "sender": { "type": "HTTPS", "config": { "address": "/invoices/receive" } },
+  "components": [
+    { "id": "validateInvoice", "type": "XmlValidator", "config": { "name": "Validate Invoice", "xsd": "InvoiceSchema.xsd" } },
+    { "id": "transformInvoice", "type": "ContentModifier", "config": { "name": "Transform Invoice for RFC", "bodyType": "expression", "wrapContent": "${body}" } }
+  ],
+  "connections": [
+    { "from": "sender", "to": "validateInvoice" },
+    { "from": "validateInvoice", "to": "transformInvoice" },
+    { "from": "transformInvoice", "to": "receiver" }
+  ],
+  "receiver": {
+    "type": "RFC",
+    "config": { "name": "Send to S4HANA", "destination": "S4_RFC_DEST", "system": "S4HANA", "transactioncommit": true }
+  },
+  "resources": [ { "type": "xsd", "name": "InvoiceSchema.xsd", "content": "..." } ]
+}
+```
+
+**Required**: `destination`. **Optional**: `name`, `system`, `transactioncommit`
+(default `false`), `newConnection` (default `false`). RFC may only be used as
+`receiver`, never `sender`.
+
+---
+
+## 7. Known limitations
+
+- `componentVersion=1.2` / `ComponentSWCVId=1.2.1` are pinned to the
+  reference export evidence in this repo, same caveat as every other
+  adapter's version pinning in commits 1-3 -- a newer tenant profile would
+  need a fresh export to confirm, not a guess.
+- The exact SAP-side default for `transactioncommit`/`newConnection` when
+  left unconfigured is not evidenced (both happened to be `true` in the one
+  export available); this compiler defaults both to `false` by its own
+  convention, not a confirmed SAP default.
+- No RFC-specific resource type was introduced (none evidenced as
+  necessary); if a future real export shows RFC function-module metadata as
+  a packaged resource, it should be verified the same way before being
+  added.

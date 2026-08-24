@@ -73,6 +73,7 @@ export { SoapAdapter } from './model/SoapAdapter';
 export { IdocAdapter } from './model/IdocAdapter';
 export { JdbcAdapter } from './model/JdbcAdapter';
 export { ProcessDirectAdapter } from './model/ProcessDirectAdapter';
+export { RfcAdapter } from './model/RfcAdapter';
 
 // ============================================================================
 // PUBLIC API - Mapper Layer

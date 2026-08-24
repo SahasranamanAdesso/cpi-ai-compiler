@@ -27,6 +27,8 @@ import { isValidXmlNCName } from '../utils/XmlName';
  *   - Process Direct is version 1.1 for BOTH directions (two independent
  *     real exports agree) -- unlike JDBC/HTTP(S), Process Direct genuinely
  *     supports both Sender and Receiver.
+ *   - RFC Receiver is version 1.2, matching rfc_reference.zip
+ *     ("Send Quality Deviation from D3 to S4HANA.iflw").
  *
  * Deliberately scoped to just these adapters (not SOAP/SFTP/IDoc/OData) --
  * this compiler has no reference evidence contradicting those adapters'
@@ -37,7 +39,8 @@ const KNOWN_ADAPTER_VERSIONS: Record<string, Partial<Record<'Sender' | 'Receiver
     'HTTPS': { Sender: '1.5' },
     'HTTP': { Receiver: '1.16' },
     'JDBC': { Receiver: '1.5' },
-    'ProcessDirect': { Sender: '1.1', Receiver: '1.1' }
+    'ProcessDirect': { Sender: '1.1', Receiver: '1.1' },
+    'RFC': { Receiver: '1.2' }
 };
 
 /**
@@ -91,6 +94,22 @@ function checkAdapterOutput(adapter: any, direction: 'Sender' | 'Receiver', labe
                 severity: 'error',
                 code: 'AD-009',
                 message: `${label} Process Direct address must be a relative path beginning with "/" (got: ${JSON.stringify(address)})`
+            });
+        }
+    }
+
+    // AD-010: RFC `destination` must be a non-empty string -- the RFC
+    // adapter is meaningless without it (it names the RFC destination
+    // configured in SAP Integration Suite's Connectivity Configuration).
+    // RfcAdapter already enforces this at construction time, so this is a
+    // regression guard, same rationale as NM-001/AD-009.
+    if (componentType === 'RFC') {
+        const destination = adapter.properties?.destination;
+        if (typeof destination !== 'string' || destination.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-010',
+                message: `${label} RFC destination must be a non-empty string (got: ${JSON.stringify(destination)})`
             });
         }
     }
