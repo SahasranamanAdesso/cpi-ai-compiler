@@ -185,6 +185,26 @@ export class BpmnProcessMapper {
                 components[0].id
             );
             process.flows.push(firstFlow);
+        } else {
+            // Zero intermediate components (e.g. "sender -> receiver"
+            // directly, including "sender -> RFC receiver" -- RFC has no
+            // component representation at all, see
+            // ComponentFactory.normalizeRfcComponents()): without this,
+            // StartEvent_2 gets zero outgoing sequence flows and
+            // EndEvent_2 gets zero incoming ones, since the "Last
+            // component to end event" block below is equally gated on
+            // components.length > 0. compileToZip() still succeeds either
+            // way (it only serializes whatever IR it's given), but SAP
+            // rejects the result on import with "Start event should have
+            // an outgoing sequence flow" -- packaging successfully is not
+            // the same as producing a structurally valid .iflw. Connect
+            // Start directly to End so the process graph is always closed.
+            const directFlow = new BpmnSequenceFlow(
+                "SequenceFlow_3",
+                "StartEvent_2",
+                "EndEvent_2"
+            );
+            process.flows.push(directFlow);
         }
 
         // Component connections

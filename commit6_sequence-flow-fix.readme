@@ -1,0 +1,194 @@
+# Commit 6: Fix orphaned Start/End events in zero-component flows
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-5 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What broke
+
+A flow with **zero intermediate components** -- `sender -> receiver`
+directly -- compiled successfully via `compileToZip()` and `validate()`
+reported `valid: true`, but SAP Integration Suite rejected the resulting
+`.iflw` on import with:
+
+> "Start event should have an outgoing sequence flow."
+
+This affected every "no intermediate steps" flow, but was most visible with
+RFC: since RFC has no component representation at all (it's purely the
+flow's receiver adapter -- see commit 4/5), a flow like "receive an employee
+ID over HTTPS and send it to SAP via RFC" has genuinely **zero** entries in
+`flow.getComponents()`, making this the easiest shape to hit by accident.
+
+## 2. Root cause
+
+`BpmnProcessMapper.map()` built the Start→...→End sequence-flow chain in
+two places, each gated by `if (components.length > 0)`:
+
+```typescript
+// Start event to first component
+if (components.length > 0) {
+    process.flows.push(new BpmnSequenceFlow("SequenceFlow_3", "StartEvent_2", components[0].id));
+}
+...
+// Last component to end event
+if (components.length > 0) {
+    process.flows.push(new BpmnSequenceFlow(`SequenceFlow_${connections.length + 4}`, lastComponent.id, "EndEvent_2"));
+}
+```
+
+When `components.length === 0`, **both** blocks were skipped entirely --
+nothing ever connected `StartEvent_2` to `EndEvent_2`. `StartEvent_2` ended
+up with zero `<bpmn2:outgoing>` sequence flows and `EndEvent_2` with zero
+`<bpmn2:incoming>` ones: two disconnected, orphaned events in an otherwise
+structurally-plausible `.iflw`. `compileToZip()` doesn't validate BPMN graph
+connectivity -- it only serializes whatever IR it's given -- so packaging
+succeeded while the artifact itself was invalid. `validate()` had no check
+for this either (it checks component-level concerns like router routes and
+duplicate IDs, not the base Start/End skeleton every flow always has), so it
+reported `valid: true` for a flow SAP would reject.
+
+This also confirmed the task's suspicion directly: `connections: [{ from:
+"sender", to: "receiver" }]` is filtered out by `fromJson()` before it ever
+becomes an internal `Connection` object (it's adapter-level metadata,
+matching `flow.getSender()`/`getReceiver()`), so it was never the thing
+responsible for the internal Start→End wiring in the first place -- that
+was always meant to be the mapper's job, and the mapper simply never did it
+for the zero-component case.
+
+## 3. The fix
+
+Added an `else` branch to the first gate only (the second gate needs no
+change -- it's naturally skipped when there are zero components, and
+correctly still fires whenever there are one or more):
+
+```typescript
+if (components.length > 0) {
+    process.flows.push(new BpmnSequenceFlow("SequenceFlow_3", "StartEvent_2", components[0].id));
+} else {
+    // Zero intermediate components: connect Start directly to End so the
+    // process graph is always closed.
+    process.flows.push(new BpmnSequenceFlow("SequenceFlow_3", "StartEvent_2", "EndEvent_2"));
+}
+```
+
+This is the smallest change that closes the graph in every case, and
+reuses the exact same `BpmnSequenceFlow` IR class and `SequenceFlow_3` id
+slot the one-or-more-components path already used for the equivalent edge
+-- no new writer, no new IR type, no change to how any component or adapter
+is represented.
+
+---
+
+## 4. Files changed (this package only)
+
+**Modified**:
+- `src/mapper/BpmnProcessMapper.ts` -- the fix described above (one `else`
+  branch, ~15 lines including comments).
+
+**New**:
+- `test-sequence-flow-regression.ts`
+
+**Deliberately not touched**: the RFC adapter/receiver architecture
+(commits 4-5, confirmed still working and unmodified), JDBC, Process
+Direct, HTTP/HTTPS, the Fiori UI, the CAP controller/`downloadFlow`
+handling, and any AI/system-prompt logic (all outside this package's scope
+per this task's explicit instruction). No writer, IR class, or validation
+rule beyond the one mapper change was touched.
+
+---
+
+## 5. Testing
+
+**Verified the fix is real, not just "tests pass"**: before finalizing,
+temporarily reverted the mapper change (`git stash`) and re-ran the new
+test suite against the unfixed code -- it failed exactly the two
+zero-component scenarios ([1] HTTPS→RFC and [5]/[6] HTTPS→HTTPS) with
+"StartEvent_2 has an outgoing sequence flow" / "EndEvent_2 is actually
+reachable from StartEvent_2", while `validate()` and `compileToZip()` both
+still reported success -- reproducing the exact reported bug and confirming
+the test would have caught it. Restored the fix and re-ran; all scenarios
+pass.
+
+`test-sequence-flow-regression.ts`, 6 scenarios (the 5 required + one
+extra covering the literal `connections: [{ from: "sender", to: "receiver"
+}]` shape called out in the task), each checked against the **raw
+generated `.iflw` XML** by parsing every `<bpmn2:sequenceFlow>` edge and
+verifying:
+- `validate()` succeeds
+- `compileToZip()` produces a non-empty ZIP and the `.iflw` exists in it
+- `StartEvent_2` has at least one outgoing sequence flow (not an orphan)
+- `EndEvent_2` has at least one incoming sequence flow (not an orphan)
+- `EndEvent_2` is **actually reachable** from `StartEvent_2` by following
+  the sequence-flow graph (a stronger check than "has some edge from
+  somewhere" -- confirms the graph is genuinely connected end-to-end, not
+  just locally non-empty)
+
+Scenarios: (1) HTTPS→RFC [zero components -- the reported bug], (2)
+HTTPS→ContentModifier→RFC [one component], (3)
+HTTPS→ContentModifier→ContentModifier→RFC [multiple components], (4)
+HTTPS→ContentModifier→HTTPS [one component, non-RFC], (5) HTTPS→HTTPS [zero
+components, non-RFC], (6) explicit `sender -> receiver` connection entry
+[zero components].
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-rfc-regression.ts` (all 15 scenarios, confirming RFC's
+architecture is completely unaffected), `test-jdbc-regression.ts`,
+`test-jdbc-ai-scenarios-regression.ts`, `test-naming-version-regression.ts`,
+`test-customer-flow-regression.ts`, `test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Example generated sequence for HTTPS -> RFC
+
+```
+Sequence flows:
+  SequenceFlow_3: StartEvent_2 -> EndEvent_2
+
+<bpmn2:startEvent id="StartEvent_2" name="Start">
+    ...
+    <bpmn2:outgoing>SequenceFlow_3</bpmn2:outgoing>
+    <bpmn2:messageEventDefinition/>
+</bpmn2:startEvent>
+
+<bpmn2:endEvent id="EndEvent_2" name="End">
+    ...
+    <bpmn2:incoming>SequenceFlow_3</bpmn2:incoming>
+    <bpmn2:messageEventDefinition/>
+</bpmn2:endEvent>
+```
+
+`StartEvent_2` now has a real `<bpmn2:outgoing>`, `EndEvent_2` a real
+`<bpmn2:incoming>`, both referencing `SequenceFlow_3`, which itself connects
+them directly (`sourceRef="StartEvent_2" targetRef="EndEvent_2"`). No orphan
+in either direction.
+
+---
+
+## 7. Known limitations
+
+None identified for this specific fix -- it closes the graph unconditionally
+whenever there are zero components, which is the only case that was
+previously broken. Flows with one or more components were already correct
+and remain byte-for-byte unchanged (verified via the full regression re-run
+above).
