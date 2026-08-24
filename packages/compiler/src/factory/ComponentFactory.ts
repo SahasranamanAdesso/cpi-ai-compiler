@@ -28,6 +28,7 @@ import { JdbcCall } from '../model/JdbcCall';
 import { ProcessDirectAdapter } from '../model/ProcessDirectAdapter';
 import { ProcessDirectCall } from '../model/ProcessDirectCall';
 import { RfcAdapter } from '../model/RfcAdapter';
+import { JmsAdapter } from '../model/JmsAdapter';
 import { Router } from '../model/Router';
 import { GroovyScript } from '../model/GroovyScript';
 import { DataStore } from '../model/DataStore';
@@ -183,7 +184,8 @@ export type ComponentType =
     | 'ProcessCall'
     | 'JdbcCall'
     | 'ProcessDirectCall'
-    | 'RFC';
+    | 'RFC'
+    | 'JMS';
 
 /**
  * Supported adapter types
@@ -197,7 +199,8 @@ export type AdapterType =
     | 'IDoc'
     | 'JDBC'
     | 'ProcessDirect'
-    | 'RFC';
+    | 'RFC'
+    | 'JMS';
 
 /**
  * Adapter direction
@@ -594,6 +597,20 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 'appears in "components" -- this error only occurs when calling createComponent() directly.)'
             );
 
+        case 'JMS':
+            // JMS has no mid-flow BPMN representation in SAP Cloud
+            // Integration either -- evidence (jms_reference.zip) shows both
+            // its Sender (Participant -> StartEvent) and Receiver
+            // (EndEvent -> Participant) messageFlows using the same
+            // flow-level shape as HTTP/SOAP/SFTP/IDoc/RFC, never a
+            // serviceTask/callActivity step. Use `sender`/`receiver: {
+            // type: "JMS", config: {...} }` instead of a components[] entry.
+            throw new Error(
+                'JMS has no mid-flow component representation in SAP Cloud Integration -- ' +
+                'it is always a flow-level sender or receiver adapter. Use `sender: { type: "JMS", config: {...} }` ' +
+                'or `receiver: { type: "JMS", config: {...} }` instead of a components[] entry.'
+            );
+
         default:
             throw new Error(`Unsupported component type: ${type}`);
     }
@@ -633,7 +650,7 @@ export function createAdapter(
     type: AdapterType,
     direction: AdapterDirection,
     config: AdapterConfig
-): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter {
+): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter {
     // Normalize config (convert Markdown URLs to plain URLs)
     const normalizedConfig = normalizeConfig(config);
 
@@ -823,6 +840,18 @@ export function createAdapter(
             // fromJson() rather than silently dropped. RfcAdapter.receiver()
             // itself throws on any key outside its documented set.
             return RfcAdapter.receiver({ ...normalizedConfig } as any);
+
+        case 'JMS':
+            // Like RFC above, JMS has no mid-flow call component to catch
+            // an unsupported property, so the full config is spread through
+            // rather than enumerated -- JmsAdapter.sender()/.receiver()
+            // itself throws on any key outside its documented set. Unlike
+            // RFC, JMS genuinely supports both directions (evidence:
+            // jms_reference.zip).
+            if (direction === 'Sender') {
+                return JmsAdapter.sender({ ...normalizedConfig } as any);
+            }
+            return JmsAdapter.receiver({ ...normalizedConfig } as any);
 
         default:
             throw new Error(`Unsupported adapter type: ${type}`);

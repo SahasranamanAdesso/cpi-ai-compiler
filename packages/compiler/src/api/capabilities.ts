@@ -263,6 +263,21 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         required: [],
         optional: {},
         notes: 'Not a real component -- see capabilities.adapters for "RFC" (Receiver only). If an RFC entry appears in "components", fromJson() automatically treats it as the flow\'s receiver instead.'
+    },
+    'JMS': {
+        // JMS is NOT a real component type -- it has no mid-flow BPMN
+        // representation in SAP Cloud Integration either (evidence:
+        // jms_reference.zip shows both its Sender and Receiver as
+        // flow-level messageFlows, never a serviceTask/callActivity). This
+        // entry exists only so `ComponentType` type-checks; it is NEVER
+        // present in getCapabilities().components (that list is built from
+        // ComponentRegistry entries, and JMS intentionally has none). Use
+        // the 'JMS' entries under capabilities.adapters (Sender AND
+        // Receiver) instead -- declare it as `sender`/`receiver: { type:
+        // "JMS", config: {...} }`, not as a component.
+        required: [],
+        optional: {},
+        notes: 'Not a real component -- see capabilities.adapters for "JMS" (Sender and Receiver). Calling createComponent(\'JMS\', ...) directly throws a clear error explaining this.'
     }
 };
 
@@ -494,7 +509,42 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 destination: 'S4_RFC_DEST'
             }
         }
-    } as any
+    } as any,
+    'JMS': {
+        // Unlike RFC/JDBC, JMS genuinely has both directions in the real
+        // SAP export (jms_reference.zip): Sender consumes from a queue to
+        // trigger the flow; Receiver sends the current message to a queue.
+        'Sender': {
+            required: ['queueName'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the sender system shown in the collaboration diagram (defaults to name)',
+                'numberConcurrentProcesses': 'Number of concurrent processes consuming the queue (default: 1)',
+                'maxRetryInterval': 'Maximum retry interval in seconds (default: 60)',
+                'useDeadLetterQueue': 'Whether to use a dead letter queue on failure (default: true)',
+                'exponentialBackoff': 'Whether to use exponential backoff between retries (default: true)',
+                'retryInterval': 'Retry interval in seconds (default: 1)'
+            },
+            example: {
+                queueName: 'IDocProcessing'
+            }
+        },
+        'Receiver': {
+            required: ['queueName'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the receiver system shown in the collaboration diagram (defaults to name)',
+                'useMessageCompression': 'Whether to compress the message before sending (default: true)',
+                'encryptMessage': 'Whether to encrypt the message before sending (default: true)',
+                'retentionThresholdAlerting': 'Retention threshold alerting, in days (default: 2)',
+                'expirationPeriod': 'Message expiration period, in days (default: 30)',
+                'transferExchangeProperties': 'Whether to transfer exchange properties onto the JMS message (default: true)'
+            },
+            example: {
+                queueName: 'IDocProcessing'
+            }
+        }
+    }
 };
 
 /**
@@ -553,7 +603,7 @@ export function getCapabilities(): Capabilities {
     // Build adapter capabilities
     const adapters: AdapterCapability[] = [];
 
-    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect', 'RFC'] as AdapterType[]) {
+    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect', 'RFC', 'JMS'] as AdapterType[]) {
         for (const direction of ['Sender', 'Receiver'] as AdapterDirection[]) {
             const requirements = ADAPTER_REQUIREMENTS[adapterType]?.[direction];
             if (!requirements) {

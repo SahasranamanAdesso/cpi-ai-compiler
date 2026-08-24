@@ -1,0 +1,306 @@
+# Commit 7: JMS Sender/Receiver adapter support
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-6 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What this commit adds: JMS support
+
+The compiler previously had no JMS adapter. This adds it, following the
+same evidence-based methodology as JDBC/Process Direct/RFC -- a real
+SAP-exported JMS iFlow ZIP (`jms_reference.zip`, `.iflw`: *"Common Flow -
+Receive IDoc from SAP S4HANA"*) was inspected first, before writing any
+code.
+
+### JMS's shape (determined from evidence, not assumed)
+
+Unlike RFC/JDBC (Receiver-only) and unlike Process Direct (both directions,
+but ALSO has a mid-flow call component), JMS in this reference is:
+
+- **A flow-level adapter supporting BOTH directions**, evidenced by two
+  separate messageFlows in the SAME `.iflw`:
+  - Sender: `MessageFlow_39953`, `sourceRef="Participant_39951"
+    targetRef="StartEvent_39952"` -- Participant → StartEvent, the exact
+    same shape every other flow-level sender uses.
+  - Receiver: `MessageFlow_39957`, `sourceRef="EndEvent_2"
+    targetRef="Participant_2"` -- EndEvent → Participant, the exact same
+    shape every other flow-level receiver uses.
+- **With NO mid-flow BPMN representation at all.** No serviceTask/
+  callActivity ExternalCall pattern for JMS exists anywhere in this export
+  (unlike JDBC/Process Direct, which do have one). Per the task's explicit
+  instruction ("Do NOT assume JMS → component → receiver is valid"), this
+  compiler does **not** invent a mid-flow "JmsCall" component.
+
+**New file**: `src/model/JmsAdapter.ts` -- static `.sender()` and
+`.receiver()` factories, mirroring `RfcAdapter.ts`'s structure but for both
+directions. Full property sets taken verbatim from the reference export:
+
+```
+Sender:   ComponentType=JMS, ComponentNS=sap, componentVersion=1.3,
+          TransportProtocol=Not Applicable, MessageProtocol=Not Applicable,
+          TransportProtocolVersion=1.5.0, MessageProtocolVersion=1.5.0,
+          ComponentSWCVId=1.5.0, direction=Sender
+cmdVariantUri: ctype::AdapterVariant/cname::sap:JMS/tp::Not Applicable/mp::Not Applicable/direction::Sender/version::1.3.0
+
+Receiver: ComponentType=JMS, ComponentNS=sap, componentVersion=1.5,
+          TransportProtocol=Not Applicable, MessageProtocol=Not Applicable,
+          TransportProtocolVersion=1.5.0, MessageProtocolVersion=1.5.0,
+          ComponentSWCVId=1.5.0, direction=Receiver
+cmdVariantUri: ctype::AdapterVariant/cname::sap:JMS/tp::Not Applicable/mp::Not Applicable/direction::Receiver/version::1.5.0
+```
+
+**Confirmed asymmetries preserved exactly, not normalized away**:
+- `componentVersion` genuinely differs by direction (1.3 Sender / 1.5
+  Receiver) -- unlike Process Direct, where both directions share 1.1.
+- Yet `TransportProtocolVersion`/`MessageProtocolVersion`/`ComponentSWCVId`
+  are `1.5.0` for **both** directions -- the Sender does NOT use `1.3.0`
+  for these, only its own `componentVersion` and `cmdVariantUri` suffix are
+  `1.3`/`1.3.0`.
+- Several boolean-shaped properties (`UseMessageCompression`,
+  `EncryptMessage`, `TransferExchangeProperties`, `useDeadLetterQueue`,
+  `ExponentialBackoff`) serialize as the literal strings `"1"`/`"0"`, **not**
+  `"true"`/`"false"` like every other adapter in this compiler
+  (`HttpAdapter`, `JdbcAdapter`, `ProcessDirectAdapter`, `RfcAdapter` all use
+  `"true"`/`"false"`). This is JMS-specific and preserved exactly as
+  evidenced, not homogenized to this compiler's usual convention.
+
+### Queue name unification
+
+`parameters.propdef`'s `param_references` confirm the **only** meaningfully
+externalized JMS property is the queue name, under one shared parameter key
+(`"JMS_Queue"`, UI label "Queue Name") -- referenced by `QueueName_inbound`
+on the Sender messageFlow and `QueueName_outbound` on the Receiver
+messageFlow. These are the same underlying concept named differently per
+direction in the raw XML, so the AI-facing config exposes a single
+`queueName` property, mapped internally to the correct raw property key
+based on direction. No other JMS property is evidenced anywhere in this
+export, so no other property is accepted.
+
+Every other property (`numberConcurrentProcesses`, `maxRetryInterval`,
+`useDeadLetterQueue`, `exponentialBackoff`, `retryInterval` for Sender;
+`useMessageCompression`, `encryptMessage`, `retentionThresholdAlerting`,
+`expirationPeriod`, `transferExchangeProperties` for Receiver) is exposed as
+**optional**, defaulting to the exact literal value seen in the reference
+export -- these are real, evidenced properties (not invented), just not
+externalized as tenant parameters in this particular export.
+
+---
+
+## 2. Wiring (same touchpoints as every other flow-level adapter)
+
+- `IFlow.ts` -- `JmsAdapter` added to **both** the `sender` and `receiver`
+  field type unions (the only adapter besides the base HTTP/OData/SFTP/
+  SOAP/IDoc set that appears in both -- RFC and JDBC are receiver-only).
+- `ComponentFactory.ts` -- `'JMS'` added to `AdapterType`; `createAdapter()`
+  dispatches to `JmsAdapter.sender()`/`.receiver()` by direction, spreading
+  the full config through (same reasoning as RFC's `createAdapter()` case:
+  JMS has no mid-flow component to catch an unsupported property, so this
+  is the only place a typo'd/invented property is rejected end-to-end via
+  `fromJson()`).
+- `capabilities.ts` -- `'JMS'` adapter capability with **both** `Sender` and
+  `Receiver` entries (mirroring Process Direct's dual-direction shape, not
+  RFC's single-direction one), added to the adapter discovery loop.
+- `index.ts` -- exports `JmsAdapter`.
+
+### The "JMS as a component" case
+
+Per the task's explicit instruction not to assume "JMS → component →
+receiver" is valid, and since evidence shows no mid-flow shape for JMS at
+all, `'JMS'` was added to `ComponentType` purely so `createComponent()` can
+have a real `case 'JMS'` that throws a **specific, actionable** error
+("JMS has no mid-flow component representation... use `sender`/`receiver`
+instead") rather than the generic "Unsupported component type: JMS".
+Unlike RFC (where a `normalizeRfcComponents()` auto-fix was added after
+observing the AI actually make that mistake), JMS's dual-direction nature
+makes auto-guessing genuinely ambiguous (which direction would a misplaced
+mid-flow "JMS" component mean?), so no auto-normalization was added
+speculatively here -- only the clear rejection message, consistent with
+"do not invent... do not assume" and "implement only the roles actually
+supported by the reference". If the AI is later observed making this exact
+mistake for JMS, the fix would follow the same evidence-first pattern RFC's
+follow-up commit used.
+
+`capabilities.components` never lists `'JMS'` (verified by a dedicated
+test) -- that list is built from `ComponentRegistry` entries, and JMS
+intentionally has none, exactly like RFC.
+
+---
+
+## 3. Validation hardening (`validate.ts`)
+
+- `KNOWN_ADAPTER_VERSIONS` extended: `'JMS': { Sender: '1.3', Receiver:
+  '1.5' }` -- the two directions' different `componentVersion`s, both
+  evidence-backed.
+- **AD-011** -- JMS queue name must be a non-empty string, checked under
+  the **direction-specific property key** evidence actually uses
+  (`QueueName_inbound` for Sender, `QueueName_outbound` for Receiver --
+  these are genuinely different XML keys, not a naming choice this compiler
+  made). `JmsAdapter` already enforces this at construction time; this is a
+  regression guard, same rationale as AD-009/AD-010.
+
+`checkAdapterOutput()` already runs against `flow.getSender()` AND
+`flow.getReceiver()` generically, so JMS gets NM-001 (channel name NCName)
+and AD-007 (component-version allowlist) checks for both directions with no
+new call site needed.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `src/model/JmsAdapter.ts`
+- `test-jms-regression.ts`
+
+**Modified**:
+- `src/model/IFlow.ts` (`JmsAdapter` added to both `sender` and `receiver`
+  type unions)
+- `src/factory/ComponentFactory.ts` (`'JMS'` adapter type, `createAdapter()`
+  case for both directions, `'JMS'` component type with an actionable
+  rejection message)
+- `src/api/capabilities.ts` (`'JMS'` adapter capability, both directions;
+  `COMPONENT_REQUIREMENTS['JMS']` type-completeness entry, never rendered
+  in `capabilities.components`)
+- `src/api/validate.ts` (AD-011, `KNOWN_ADAPTER_VERSIONS` entry)
+- `src/index.ts` (`JmsAdapter` export)
+
+**Deliberately not touched**: no new writer was needed (JMS compiles to the
+exact same `<bpmn2:messageFlow>` shape every flow-level adapter already
+uses via the existing collaboration-writer path), no mid-flow component
+model, the BPMN IR, packaging logic, existing resource handling (JMS has no
+resources per evidence -- `parameters.propdef` shows only the one queue-name
+parameter, no XSD/mapping/groovy resource tied to it), the Fiori UI, the CAP
+controller/`downloadFlow` handling, any AI/system-prompt logic, the
+sequence-flow fix from commit 6 (re-verified working correctly for all JMS
+scenarios, see §5), and every other adapter/component type -- RFC and
+Process Direct in particular, explicitly re-verified unmodified via their
+own full regression suites.
+
+---
+
+## 5. Testing
+
+`test-jms-regression.ts` (same `ts-node` convention as commits 1-6), 12
+scenario groups, all passing, each checked against the raw generated
+`.iflw` XML:
+
+1. `getCapabilities()` exposes JMS Sender AND Receiver, and explicitly
+   confirms JMS does NOT appear in `capabilities.components`.
+2. HTTPS → JMS Receiver (the primary requested scenario) -- confirms the
+   exact evidenced property set/values, the exact `cmdVariantUri`, and the
+   literal `"1"`/`"0"` boolean encoding for the four Receiver-side flags.
+3. JMS Sender → HTTPS Receiver -- confirms the Sender's property set,
+   including the confirmed `componentVersion` (1.3) vs.
+   `TransportProtocolVersion` (1.5.0) asymmetry.
+4. JMS Sender + JMS Receiver in the same flow (matching evidence, which has
+   both directions in one `.iflw`).
+5. HTTPS → ContentModifier → JMS Receiver.
+6-8. (folded into 2-5) `fromJson()` → `validate()` → `compileToZip()` for
+   every scenario, plus structural `.iflw` checks.
+9. Missing `queueName` rejected, both directions.
+10. Unsupported properties (invented `connectionFactory`/`deliveryMode`)
+    rejected, both directions -- directly exercising the task's explicit
+    warning not to invent such properties.
+11. JMS declared as a `components[]` entry rejected with an actionable
+    error (not the generic message), both via `fromJson()` and via
+    `createComponent('JMS', ...)` called directly.
+12. JMS combined with `ProcessCall` + `JdbcCall` in one flow -- zero
+    duplicate ids across 50 generated XML element ids.
+
+**Sequence-flow correctness** (commit 6's fix) verified for every scenario
+above via a shared `assertNoOrphanStartEnd()` helper: `StartEvent_2` has an
+outgoing edge, `EndEvent_2` has an incoming edge, and `EndEvent_2` is
+actually graph-reachable from `StartEvent_2` -- confirming JMS's
+zero-and-one-component flows (a JMS-only sender/receiver flow has zero
+intermediate components, exactly the shape commit 6 fixed) are not
+orphaned.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-sequence-flow-regression.ts`, `test-rfc-regression.ts`
+(all 15 scenarios), `test-jdbc-regression.ts`,
+`test-jdbc-ai-scenarios-regression.ts`, `test-naming-version-regression.ts`,
+`test-customer-flow-regression.ts`, `test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-jms-regression.ts
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Example generic JSON
+
+```json
+{
+  "name": "Order to JMS Queue",
+  "sender": { "type": "HTTPS", "config": { "address": "/orders" } },
+  "receiver": { "type": "JMS", "config": { "queueName": "OrderQueue", "system": "S4_JMS" } }
+}
+```
+
+```json
+{
+  "name": "IDoc Queue to Downstream",
+  "sender": { "type": "JMS", "config": { "queueName": "IDocProcessing", "system": "S4_JMS" } },
+  "receiver": { "type": "HTTPS", "config": { "url": "https://downstream.example.com", "method": "POST" } }
+}
+```
+
+**Required** (both directions): `queueName`. **Optional Sender**: `name`,
+`system`, `numberConcurrentProcesses` (default 1), `maxRetryInterval`
+(default 60), `useDeadLetterQueue` (default true), `exponentialBackoff`
+(default true), `retryInterval` (default 1). **Optional Receiver**: `name`,
+`system`, `useMessageCompression` (default true), `encryptMessage` (default
+true), `retentionThresholdAlerting` (default 2), `expirationPeriod`
+(default 30), `transferExchangeProperties` (default true).
+
+---
+
+## 7. Confirmation: `compileToZip()` succeeds and matches the reference
+
+```
+fromJson({ sender: HTTPS, receiver: { type: "JMS", config: { queueName: "OrderQueue" } } })
+  -> succeeds
+validate(flow) -> { valid: true, errors: [], warnings: [] }
+compileToZip(flow) -> succeeds, ZIP contains a valid .iflw
+generated messageFlow: sourceRef="EndEvent_2" -> ComponentType=JMS, QueueName_outbound=OrderQueue,
+  cmdVariantUri=ctype::AdapterVariant/cname::sap:JMS/tp::Not Applicable/mp::Not Applicable/direction::Receiver/version::1.5.0
+StartEvent_2 has an outgoing sequence flow; EndEvent_2 is reachable from it (commit 6's fix holds for JMS too)
+```
+
+Every property, value, and `cmdVariantUri` in the generated output was
+checked against `jms_reference.zip` directly (see `test-jms-regression.ts`
+assertions) -- not approximated from general JMS knowledge.
+
+---
+
+## 8. Known limitations
+
+- `componentVersion`/`ComponentSWCVId` values are pinned to the reference
+  export evidence in this repo, same caveat as every other adapter's
+  version pinning in commits 1-6 -- a newer tenant profile would need a
+  fresh export to confirm, not a guess.
+- JMS declared as a `components[]` entry is rejected with a clear error
+  rather than auto-normalized (unlike RFC) -- see §2 for why; this can be
+  revisited with evidence if the AI is observed making that specific
+  mistake for JMS.
+- No JMS-specific resource type was introduced (none evidenced as
+  necessary -- only one externalized parameter, the queue name, exists in
+  this export); if a future real export shows a JMS-related packaged
+  resource, it should be verified the same way before being added.

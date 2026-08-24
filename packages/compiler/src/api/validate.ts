@@ -29,6 +29,11 @@ import { isValidXmlNCName } from '../utils/XmlName';
  *     supports both Sender and Receiver.
  *   - RFC Receiver is version 1.2, matching rfc_reference.zip
  *     ("Send Quality Deviation from D3 to S4HANA.iflw").
+ *   - JMS is version 1.3 for Sender / 1.5 for Receiver, matching
+ *     jms_reference.zip ("Common Flow - Receive IDoc from SAP S4HANA.iflw")
+ *     -- unlike Process Direct, JMS's two directions genuinely use
+ *     DIFFERENT componentVersions (confirmed directly from evidence, not
+ *     normalized to match each other).
  *
  * Deliberately scoped to just these adapters (not SOAP/SFTP/IDoc/OData) --
  * this compiler has no reference evidence contradicting those adapters'
@@ -40,7 +45,8 @@ const KNOWN_ADAPTER_VERSIONS: Record<string, Partial<Record<'Sender' | 'Receiver
     'HTTP': { Receiver: '1.16' },
     'JDBC': { Receiver: '1.5' },
     'ProcessDirect': { Sender: '1.1', Receiver: '1.1' },
-    'RFC': { Receiver: '1.2' }
+    'RFC': { Receiver: '1.2' },
+    'JMS': { Sender: '1.3', Receiver: '1.5' }
 };
 
 /**
@@ -110,6 +116,25 @@ function checkAdapterOutput(adapter: any, direction: 'Sender' | 'Receiver', labe
                 severity: 'error',
                 code: 'AD-010',
                 message: `${label} RFC destination must be a non-empty string (got: ${JSON.stringify(destination)})`
+            });
+        }
+    }
+
+    // AD-011: JMS queue name must be a non-empty string, checked under the
+    // direction-specific property key evidence shows SAP actually uses
+    // (`QueueName_inbound` for Sender, `QueueName_outbound` for Receiver --
+    // these are genuinely different XML property keys, not just a naming
+    // convention this compiler chose). JmsAdapter already enforces this at
+    // construction time, so this is a regression guard, same rationale as
+    // NM-001/AD-009/AD-010.
+    if (componentType === 'JMS') {
+        const queueKey = direction === 'Sender' ? 'QueueName_inbound' : 'QueueName_outbound';
+        const queueName = adapter.properties?.[queueKey];
+        if (typeof queueName !== 'string' || queueName.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-011',
+                message: `${label} JMS ${queueKey} must be a non-empty string (got: ${JSON.stringify(queueName)})`
             });
         }
     }

@@ -74,6 +74,7 @@ export { IdocAdapter } from './model/IdocAdapter';
 export { JdbcAdapter } from './model/JdbcAdapter';
 export { ProcessDirectAdapter } from './model/ProcessDirectAdapter';
 export { RfcAdapter } from './model/RfcAdapter';
+export { JmsAdapter } from './model/JmsAdapter';
 
 // ============================================================================
 // PUBLIC API - Mapper Layer

@@ -11,6 +11,7 @@ import { IdocAdapter } from "./IdocAdapter";
 import { JdbcAdapter } from "./JdbcAdapter";
 import { ProcessDirectAdapter } from "./ProcessDirectAdapter";
 import { RfcAdapter } from "./RfcAdapter";
+import { JmsAdapter } from "./JmsAdapter";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -58,19 +59,21 @@ export class IFlow {
     private readonly exceptionSubprocesses: ExceptionSubprocess[] = [];
 
     /**
-     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, Process Direct, etc.)
-     * Note: JdbcAdapter is receiver-only (no JDBC Sender exists in SAP CPI)
-     * and is intentionally excluded from this union.
+     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, Process Direct, JMS, etc.)
+     * Note: JdbcAdapter/RfcAdapter are receiver-only (no JDBC/RFC Sender
+     * exists in SAP CPI) and are intentionally excluded from this union.
      */
-    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter;
+    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter;
 
     /**
-     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, RFC, etc.)
+     * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, RFC, JMS, etc.)
      * Note: RfcAdapter is receiver-only (no RFC Sender exists in SAP CPI --
      * RFC is always an outbound call from CPI into an SAP system) and is
-     * intentionally excluded from the `sender` union above.
+     * intentionally excluded from the `sender` union above. JmsAdapter,
+     * unlike Rfc/Jdbc, genuinely supports both directions (evidence:
+     * jms_reference.zip shows both a Sender and a Receiver JMS messageFlow).
      */
-    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter;
+    private receiver?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter;
 
     /**
      * Canonical ID mapping (AI ID → Component)
@@ -188,10 +191,10 @@ export class IFlow {
 
     /**
      * Sets the sender adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, or Process Direct sender adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, Process Direct, or JMS sender adapter
      * @returns this IFlow instance for method chaining
      */
-    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter): IFlow {
+    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter): IFlow {
         this.sender = adapter;
         return this;
     }
@@ -200,16 +203,16 @@ export class IFlow {
      * Gets the sender adapter
      * @returns Sender adapter or undefined
      */
-    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | undefined {
+    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter | undefined {
         return this.sender;
     }
 
     /**
      * Sets the receiver adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, or RFC receiver adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, RFC, or JMS receiver adapter
      * @returns this IFlow instance for method chaining
      */
-    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter): IFlow {
+    public setReceiver(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter): IFlow {
         this.receiver = adapter;
         return this;
     }
@@ -218,7 +221,7 @@ export class IFlow {
      * Gets the receiver adapter
      * @returns Receiver adapter or undefined
      */
-    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | undefined {
+    public getReceiver(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter | undefined {
         return this.receiver;
     }
 
