@@ -182,7 +182,8 @@ export type ComponentType =
     | 'XsltMapping'
     | 'ProcessCall'
     | 'JdbcCall'
-    | 'ProcessDirectCall';
+    | 'ProcessDirectCall'
+    | 'RFC';
 
 /**
  * Supported adapter types
@@ -574,6 +575,25 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
             return new ProcessDirectCall(componentName, adapter, id);
         }
 
+        case 'RFC':
+            // RFC has no mid-flow BPMN representation in SAP Cloud
+            // Integration -- evidence (rfc_reference.zip) shows it is
+            // always the flow's own receiver adapter (EndEvent ->
+            // Participant, the same shape as HTTP/SOAP/SFTP/IDoc), never a
+            // serviceTask/callActivity step. fromJson() normalizes a
+            // components[] entry with type "RFC" into "receiver" before
+            // this function is ever called (see normalizeRfcComponents()),
+            // so this only throws when createComponent('RFC', ...) is
+            // called directly, bypassing that normalization -- give a
+            // clear, actionable message instead of the generic
+            // "Unsupported component type" error.
+            throw new Error(
+                'RFC has no mid-flow component representation in SAP Cloud Integration -- ' +
+                'it is always the flow\'s receiver adapter. Use `receiver: { type: "RFC", config: {...} } ` ' +
+                'instead of a components[] entry. (fromJson() normalizes this automatically when RFC ' +
+                'appears in "components" -- this error only occurs when calling createComponent() directly.)'
+            );
+
         default:
             throw new Error(`Unsupported component type: ${type}`);
     }
@@ -858,7 +878,105 @@ export function createAdapter(
  * const zipBuffer = await compileToZip(flow);
  * ```
  */
+
+/**
+ * Normalizes a common AI-generated JSON mistake: declaring RFC as a
+ * mid-flow "component" step (e.g. `{ id: "rfc_receiver_component", type:
+ * "RFC", config: {...} }`) instead of, or in addition to, the compiler's
+ * actual RFC representation, `receiver: { type: "RFC", config: {...} }`.
+ *
+ * Per SAP evidence (rfc_reference.zip, "Send Quality Deviation from D3 to
+ * S4HANA.iflw"), RFC has no mid-flow BPMN shape at all -- it is always the
+ * flow's own EndEvent -> Receiver messageFlow, exactly like HTTP/SOAP/
+ * SFTP/IDoc. There is nothing to compile for an RFC "step" placed in the
+ * middle of a component chain, because SAP itself has no such element.
+ *
+ * Rather than reject this shape outright (`createComponent()` would throw
+ * "Unsupported component type: RFC", the exact regression reported --
+ * whose only "fix" from a blind retry is deleting RFC support entirely),
+ * this function recognizes the intent and rewrites the JSON in place
+ * before the rest of `fromJson()` runs:
+ *   - the RFC component definition is removed from `components`
+ *   - `receiver` is set (or verified consistent) from its config
+ *   - the connection into it is repointed to the flow's actual "receiver"
+ *     endpoint, and the redundant "-> receiver" edge after it is dropped
+ *
+ * This is a shape-normalization, not a silent fallback: it still throws on
+ * genuine ambiguity rather than guessing --
+ *   - more than one RFC component declared (RFC is not a multi-instance,
+ *     mid-flow component -- a flow has exactly one receiver),
+ *   - an RFC component AND a `receiver` of a different adapter type,
+ *   - an RFC component AND a `receiver` of type RFC with DIFFERENT config,
+ *   - an RFC component with an outgoing connection to anything other than
+ *     "receiver" (RFC is always the flow's terminal step).
+ * Each of those throws a specific, actionable error instead of resolving
+ * to a guess.
+ */
+function normalizeRfcComponents(json: IFlowJson): IFlowJson {
+    if (!json.components) {
+        return json;
+    }
+
+    const rfcComponents = json.components.filter(c => c.type === 'RFC');
+    if (rfcComponents.length === 0) {
+        return json;
+    }
+
+    if (rfcComponents.length > 1) {
+        throw new Error(
+            'Multiple RFC components declared. RFC has no mid-flow representation in SAP Cloud Integration -- ' +
+            'it is always the flow\'s own receiver adapter (a flow has exactly one). Declare a single ' +
+            '"receiver": { "type": "RFC", "config": {...} } instead.'
+        );
+    }
+
+    const rfcComponent = rfcComponents[0];
+    const rfcId = rfcComponent.id;
+
+    if (json.receiver && json.receiver.type !== 'RFC') {
+        throw new Error(
+            `Flow declares both an RFC component ("${rfcId}") and a receiver of type "${json.receiver.type}". ` +
+            'RFC has no mid-flow representation -- it must be the flow\'s only receiver. Remove one of the two.'
+        );
+    }
+
+    if (json.receiver && json.receiver.type === 'RFC') {
+        // Both declared -- they must agree, otherwise which config should
+        // win is ambiguous and must not be silently guessed.
+        if (JSON.stringify(rfcComponent.config) !== JSON.stringify(json.receiver.config)) {
+            throw new Error(
+                `Flow declares both an RFC component ("${rfcId}") and a "receiver" of type RFC with different ` +
+                'configuration. RFC has no mid-flow representation -- declare it once, as ' +
+                '"receiver": { "type": "RFC", "config": {...} }.'
+            );
+        }
+    }
+
+    const connections = json.connections || [];
+    const invalidOutgoing = connections.filter(conn => conn.from === rfcId && conn.to !== 'receiver');
+    if (invalidOutgoing.length > 0) {
+        throw new Error(
+            `RFC component "${rfcId}" has an outgoing connection to "${invalidOutgoing[0].to}", but RFC is ` +
+            'always the flow\'s terminal receiver step in SAP Cloud Integration -- nothing can follow it.'
+        );
+    }
+
+    return {
+        ...json,
+        components: json.components.filter(c => c !== rfcComponent),
+        connections: connections
+            .filter(conn => !(conn.from === rfcId && conn.to === 'receiver')) // drop the now-redundant rfc -> receiver edge
+            .map(conn => conn.to === rfcId ? { ...conn, to: 'receiver' } : conn),
+        receiver: { type: 'RFC', config: rfcComponent.config }
+    };
+}
+
 export function fromJson(json: IFlowJson): IFlow {
+    // Normalize an RFC "component" (a common AI JSON mistake -- see
+    // normalizeRfcComponents() doc) into the compiler's real RFC
+    // representation before anything else runs.
+    json = normalizeRfcComponents(json);
+
     // Validate required fields
     if (!json.name) {
         throw new Error('IFlow JSON requires name property');

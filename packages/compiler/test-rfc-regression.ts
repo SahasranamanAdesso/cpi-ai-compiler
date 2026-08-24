@@ -30,7 +30,7 @@
  *      test/run-rt-003-tests.ts, test/run-mapping-regression-simple.ts.
  */
 
-import { fromJson, validate, compileToZip, getCapabilities, IFlowJson } from './src/index';
+import { fromJson, validate, compileToZip, getCapabilities, createComponent, IFlowJson } from './src/index';
 import { listZipEntries, readZipEntry } from './scripts/inspectZip';
 
 let failures = 0;
@@ -176,6 +176,130 @@ async function main() {
         console.log(`  Correctly threw: ${(err as Error).message}`);
     }
     assert(threwOnSenderDirection, 'fromJson() throws when RFC is used as a Sender (SAP CPI has no RFC sender)');
+
+    // ------------------------------------------------------------------
+    // [10] RFC declared as a mid-flow "component" (a common AI JSON
+    // mistake) is normalized into the flow's real receiver instead of
+    // throwing "Unsupported component type: RFC" or being silently
+    // dropped. Reproduces the exact reported AI-generated JSON.
+    // ------------------------------------------------------------------
+    console.log('\n[10] RFC declared as a components[] entry is normalized to the flow receiver');
+    const reportedAiJson: any = {
+        name: 'EmployeeRequestToRFC',
+        sender: { type: 'HTTPS', config: { address: '/employee/request' } },
+        components: [
+            { id: 'rfc_receiver_component', type: 'RFC', config: { destination: 'S4HANA_RFC_DESTINATION' } }
+        ],
+        receiver: { type: 'RFC', config: { destination: 'S4HANA_RFC_DESTINATION' } },
+        connections: [
+            { from: 'sender', to: 'rfc_receiver_component' },
+            { from: 'rfc_receiver_component', to: 'receiver' }
+        ],
+        resources: []
+    };
+    const reportedFlow = fromJson(reportedAiJson);
+    assert(reportedFlow.getComponents().length === 0, 'the RFC "component" is removed from the main component chain (it has no BPMN mid-flow shape)');
+    assert((reportedFlow.getReceiver() as any)?.properties?.ComponentType === 'RFC', 'the flow\'s receiver is set to RFC from the normalized component config');
+    const reportedValidation = validate(reportedFlow);
+    console.log('  validate():', JSON.stringify(reportedValidation));
+    assert(reportedValidation.valid, 'the normalized flow validates with zero errors');
+    const reportedZip = await compileToZip(reportedFlow);
+    assert(reportedZip.length > 0, 'compileToZip() succeeds for the exact reported AI JSON');
+    const reportedIflw = readZipEntry(reportedZip, listZipEntries(reportedZip).find(e => e.endsWith('.iflw'))!).toString('utf-8');
+    assert(/<bpmn2:messageFlow[^>]*sourceRef="EndEvent_2"[\s\S]*?<value>RFC<\/value>[\s\S]*?<value>S4HANA_RFC_DESTINATION<\/value>/.test(reportedIflw), 'generated .iflw contains the RFC receiver messageFlow with the configured destination');
+
+    // ------------------------------------------------------------------
+    // [11] RFC declared ONLY as a component (no explicit "receiver" at
+    // all) is still normalized correctly.
+    // ------------------------------------------------------------------
+    console.log('\n[11] RFC as the only components[] entry (no explicit receiver) is normalized');
+    const componentOnlyJson: any = {
+        name: 'RFC Component Only',
+        sender: { type: 'HTTPS', config: { address: '/x' } },
+        components: [{ id: 'callRfc', type: 'RFC', config: { destination: 'S4HANA_RFC_DESTINATION' } }],
+        connections: [{ from: 'sender', to: 'callRfc' }, { from: 'callRfc', to: 'receiver' }]
+    };
+    const componentOnlyFlow = fromJson(componentOnlyJson);
+    const componentOnlyValidation = validate(componentOnlyFlow);
+    assert(componentOnlyValidation.valid, 'a flow with RFC declared only as a component (no explicit receiver) still validates');
+    const componentOnlyZip = await compileToZip(componentOnlyFlow);
+    assert(componentOnlyZip.length > 0, 'compileToZip() succeeds when RFC is declared only as a component');
+
+    // ------------------------------------------------------------------
+    // [12] Conflicting RFC component + receiver configs are rejected, not
+    // silently guessed.
+    // ------------------------------------------------------------------
+    console.log('\n[12] Conflicting RFC component + receiver configuration is rejected');
+    let threwOnConflict = false;
+    try {
+        fromJson({
+            name: 'Conflicting RFC',
+            sender: { type: 'HTTPS', config: { address: '/x' } },
+            components: [{ id: 'rfcA', type: 'RFC' as any, config: { destination: 'DEST_A' } }],
+            receiver: { type: 'RFC' as any, config: { destination: 'DEST_B' } },
+            connections: [{ from: 'sender', to: 'rfcA' }, { from: 'rfcA', to: 'receiver' }]
+        });
+    } catch (err) {
+        threwOnConflict = true;
+        console.log(`  Correctly threw: ${(err as Error).message}`);
+    }
+    assert(threwOnConflict, 'fromJson() throws when an RFC component and a "receiver" of type RFC disagree, rather than silently picking one');
+
+    // ------------------------------------------------------------------
+    // [13] RFC component with a conflicting non-RFC receiver is rejected.
+    // ------------------------------------------------------------------
+    console.log('\n[13] RFC component + a differently-typed receiver is rejected');
+    let threwOnTypeConflict = false;
+    try {
+        fromJson({
+            name: 'RFC Component Vs HTTPS Receiver',
+            sender: { type: 'HTTPS', config: { address: '/x' } },
+            components: [{ id: 'rfcB', type: 'RFC' as any, config: { destination: 'DEST' } }],
+            connections: [{ from: 'sender', to: 'rfcB' }, { from: 'rfcB', to: 'receiver' }],
+            receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
+        });
+    } catch (err) {
+        threwOnTypeConflict = true;
+        console.log(`  Correctly threw: ${(err as Error).message}`);
+    }
+    assert(threwOnTypeConflict, 'fromJson() throws when an RFC component and a differently-typed receiver are both declared');
+
+    // ------------------------------------------------------------------
+    // [14] Multiple RFC components are rejected (RFC has no multi-instance
+    // mid-flow shape -- a flow has exactly one receiver).
+    // ------------------------------------------------------------------
+    console.log('\n[14] Multiple RFC components are rejected');
+    let threwOnMultiple = false;
+    try {
+        fromJson({
+            name: 'Multiple RFC Components',
+            sender: { type: 'HTTPS', config: { address: '/x' } },
+            components: [
+                { id: 'rfc1', type: 'RFC' as any, config: { destination: 'DEST_1' } },
+                { id: 'rfc2', type: 'RFC' as any, config: { destination: 'DEST_2' } }
+            ],
+            connections: [{ from: 'sender', to: 'rfc1' }, { from: 'rfc1', to: 'rfc2' }, { from: 'rfc2', to: 'receiver' }]
+        });
+    } catch (err) {
+        threwOnMultiple = true;
+        console.log(`  Correctly threw: ${(err as Error).message}`);
+    }
+    assert(threwOnMultiple, 'fromJson() throws when more than one RFC component is declared');
+
+    // ------------------------------------------------------------------
+    // [15] createComponent('RFC', ...) called directly (bypassing
+    // fromJson()'s normalization) gives a clear, actionable error instead
+    // of the generic "Unsupported component type: RFC".
+    // ------------------------------------------------------------------
+    console.log('\n[15] createComponent(\'RFC\', ...) directly gives an actionable error');
+    let directCallError: string | undefined;
+    try {
+        createComponent('RFC' as any, { destination: 'DEST' });
+    } catch (err) {
+        directCallError = (err as Error).message;
+        console.log(`  Correctly threw: ${directCallError}`);
+    }
+    assert(!!directCallError && directCallError.includes('receiver') && !directCallError.startsWith('Unsupported component type'), 'createComponent(\'RFC\', ...) explains RFC must be a receiver, not the generic "Unsupported component type" message');
 
     console.log(`\n=== ${failures === 0 ? 'ALL PASSED' : failures + ' FAILURE(S)'} ===`);
     process.exit(failures === 0 ? 0 : 1);

@@ -245,6 +245,24 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
             address: '/process/domestic-orders'
         },
         notes: 'Mid-flow request-reply call to ANOTHER integration flow via the Process Direct adapter (in-memory, same tenant, no network hop) -- the target flow must expose a matching Process Direct Sender at the same "address". Unlike JdbcCall, this has no query/body requirement: the current message is simply passed to the target flow, and processing continues with whatever it returns. `address` must be a relative path beginning with "/" (e.g. "/process/domestic-orders") and must match the target flow\'s Process Direct Sender address exactly. Multiple ProcessDirectCall instances are supported in the same flow -- give each an explicit, unique "id". Unsupported properties are rejected, not silently ignored.'
+    },
+    'RFC': {
+        // RFC is NOT a real component type -- it has no mid-flow BPMN
+        // representation in SAP Cloud Integration (evidence:
+        // rfc_reference.zip shows it is always the flow's own receiver
+        // adapter, never a serviceTask/callActivity). This entry exists
+        // only so `ComponentType` (which includes 'RFC' purely so
+        // fromJson() can recognize and correct the common mistake of
+        // declaring it as a components[] entry -- see
+        // ComponentFactory.normalizeRfcComponents()) type-checks. It is
+        // NEVER present in getCapabilities().components, because that list
+        // is built from ComponentRegistry entries and RFC intentionally has
+        // none. Use the 'RFC' entry under capabilities.adapters (Receiver
+        // direction) instead -- declare it as
+        // `receiver: { type: "RFC", config: {...} }`, not as a component.
+        required: [],
+        optional: {},
+        notes: 'Not a real component -- see capabilities.adapters for "RFC" (Receiver only). If an RFC entry appears in "components", fromJson() automatically treats it as the flow\'s receiver instead.'
     }
 };
 

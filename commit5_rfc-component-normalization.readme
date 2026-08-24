@@ -1,0 +1,202 @@
+# Commit 5: RFC "component" normalization (fixes "Unsupported component type: RFC")
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-4 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What broke
+
+Commit 4 added full RFC **receiver adapter** support (`receiver: { type:
+"RFC", config: {...} }`), evidence-backed against `rfc_reference.zip`. But
+the AI layer sitting in front of this compiler was generating JSON that
+ALSO (or instead) declared RFC as a **mid-flow component**:
+
+```json
+{
+  "components": [
+    { "id": "rfc_receiver_component", "type": "RFC", "config": { "destination": "S4HANA_RFC_DESTINATION" } }
+  ],
+  "receiver": { "type": "RFC", "config": { "destination": "S4HANA_RFC_DESTINATION" } }
+}
+```
+
+`ComponentFactory.createComponent()` has no `case 'RFC'`, so this hit the
+`default: throw new Error('Unsupported component type: RFC')` branch. The
+reported symptom was that a subsequent retry "fixed" this by deleting the
+RFC component entirely -- producing a flow that `validate()` incorrectly
+accepted as `valid: true` despite not doing what was asked (no RFC call at
+all).
+
+## 2. Why this isn't a gap in commit 4's architecture
+
+Re-checked against evidence: `rfc_reference.zip`'s only RFC messageFlow has
+`sourceRef="EndEvent_2" targetRef="Participant_2"` -- there is no
+serviceTask/callActivity ExternalCall shape for RFC anywhere in that export
+(unlike JDBC/Process Direct, which genuinely do have an evidenced mid-flow
+shape via `JdbcCall`/`ProcessDirectCall`). Inventing an "RfcCall" mid-flow
+component now, with no evidence it exists in real SAP exports, would violate
+this project's evidence-based rule (CLAUDE.md: "the compiler implements the
+specification, it does not invent it"). So the correct fix is not a new
+component type -- it's recognizing that the AI's `components[]` entry and
+the compiler's `receiver` entry describe the exact same real thing, and
+reconciling them.
+
+## 3. The fix: `normalizeRfcComponents()`
+
+New function in `ComponentFactory.ts`, called as the very first line of
+`fromJson()`. It detects an RFC entry in `components[]` and rewrites the
+JSON before anything else runs:
+
+- The RFC component definition is removed from `components`.
+- `receiver` is set from its config (or, if a `receiver: { type: "RFC" }`
+  was ALSO declared with the *same* config, the duplicate is simply
+  resolved -- both describe one real thing).
+- The connection routed *into* the RFC component is repointed to
+  `"receiver"`; the now-redundant `rfc -> receiver` edge is dropped.
+
+This is a **shape normalization**, not a silent fallback -- it still throws
+on genuine ambiguity instead of guessing:
+- **More than one** RFC component declared (RFC is not multi-instance --
+  a flow has exactly one receiver).
+- An RFC component **and** a `receiver` of a **different** adapter type.
+- An RFC component **and** a `receiver` of type RFC with **different**
+  configuration (which one should win is ambiguous).
+- An RFC component with an **outgoing connection to anything other than
+  `"receiver"`** (RFC is always the flow's terminal step -- nothing can
+  follow it).
+
+After normalization, the JSON flows through the exact same `createAdapter('RFC',
+'Receiver', config)` → `RfcAdapter.receiver()` path commit 4 already built
+and fully validates (`assertSupportedKeys`, `destination` requirement,
+AD-010, etc.) -- nothing about RFC's actual validation or generation
+changed, only how a mis-shaped input reaches it.
+
+### `createComponent('RFC', ...)` called directly
+
+For anyone bypassing `fromJson()` (calling the factory function directly),
+`createComponent()` now has an explicit `case 'RFC'` that throws a specific,
+actionable message ("RFC has no mid-flow component representation... use
+`receiver: { type: "RFC", ... }` instead") rather than the generic
+"Unsupported component type: RFC". This is the only place that error can
+still occur, and only for that specific call pattern.
+
+---
+
+## 4. Files changed (this package only)
+
+**Modified**:
+- `src/factory/ComponentFactory.ts` -- `'RFC'` added to `ComponentType`
+  (needed so `components[].type: "RFC"` type-checks and so
+  `createComponent()`'s switch can have a real case for it); new
+  `normalizeRfcComponents()` function, called at the top of `fromJson()`;
+  new `case 'RFC'` in `createComponent()`'s switch.
+- `src/api/capabilities.ts` -- `COMPONENT_REQUIREMENTS['RFC']` entry added
+  purely to satisfy `Record<ComponentType, ...>`'s type completeness now
+  that `'RFC'` is a `ComponentType` member. This entry is **never** rendered
+  in `getCapabilities().components`, because that list is built from
+  `ComponentRegistry` entries and RFC intentionally has none (it remains
+  visible only under `capabilities.adapters`, unchanged from commit 4) --
+  documented inline so this isn't mistaken for RFC becoming a real
+  component.
+- `test-rfc-regression.ts` -- 6 new scenarios ([10]-[15]) covering the
+  reported JSON verbatim, component-only (no explicit receiver), conflicting
+  configs, conflicting adapter types, multiple RFC components, and the
+  direct `createComponent()` call path.
+
+**Deliberately not touched**: `RfcAdapter.ts` itself (unchanged --
+commit 4's implementation was already correct; this is purely an input-
+normalization layer in front of it), the Fiori UI, the CAP
+controller/`downloadFlow` handling, any AI/system-prompt logic (all outside
+this package's scope, per this task's explicit instruction), and every
+other adapter/component type.
+
+---
+
+## 5. Items 11 and 12 from the task (duplicate IDs, resource paths)
+
+Both were already fixed in earlier commits and remain verified, not
+touched again here:
+- **Duplicate component IDs** (`ProcessCall_<timestamp>` collisions): fixed
+  in commit 1 (`ComponentFactory.resolveComponentId()`, `IdGenerator`) and
+  re-verified continuously since (`test-naming-version-regression.ts`'s
+  duplicate-ID stress test, `test-localintegrationprocess-regression.ts`'s
+  and `test-processdirect-regression.ts`'s multi-instance stress tests --
+  all still passing after this change).
+- **Doubled resource paths** (`resources/xsd/xsd/DomesticOrder.xsd`): fixed
+  in commit 1 (`normalizeXsdPath()` in `ComponentFactory.ts`); still
+  asserted by `test-jdbc-regression.ts` ("no doubled resource directory
+  prefixes"), which passes.
+
+Nothing in this change touches ID generation or resource path handling, so
+no new risk was introduced to either.
+
+---
+
+## 6. Testing
+
+`test-rfc-regression.ts`, 6 new scenarios (15 total in the file), all
+passing, each checked against the real generated `.iflw` XML:
+
+1. The exact reported AI JSON (RFC as both a component and a matching
+   receiver) -- confirms the component is removed, the receiver is set to
+   RFC, `validate()` returns `valid: true`, `compileToZip()` succeeds, and
+   the generated messageFlow carries the configured destination.
+2. RFC declared ONLY as a component (no explicit `receiver` at all) --
+   confirms normalization works without a duplicate declaration too.
+3. Conflicting RFC component + RFC receiver configs -- rejected.
+4. RFC component + a differently-typed receiver (e.g. HTTPS) -- rejected.
+5. Multiple RFC components in one flow -- rejected.
+6. `createComponent('RFC', ...)` called directly -- gives the specific,
+   actionable message instead of the generic "Unsupported component type".
+
+**Full pre-existing regression suite re-run -- zero regressions**:
+`test-jdbc-regression.ts` (incl. resource-path and duplicate-ID checks),
+`test-jdbc-ai-scenarios-regression.ts`, `test-naming-version-regression.ts`
+(incl. its own duplicate-ID stress test), `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`, `test-localintegrationprocess-regression.ts`,
+`test/run-rt-003-tests.ts` (9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 7. Confirmation: the exact reported flow reaches `compileToZip()`
+
+```
+fromJson({ name: "EmployeeRequestToRFC", sender: HTTPS, components: [{type:"RFC",...}], receiver: {type:"RFC",...}, connections: [...] })
+  -> succeeds, components: [] (RFC component normalized away), receiver.properties.ComponentType === "RFC"
+validate(flow) -> { valid: true, errors: [], warnings: [] }
+compileToZip(flow) -> succeeds, ZIP contains EmployeeRequestToRFC.iflw
+generated messageFlow: sourceRef="EndEvent_2" -> ComponentType=RFC, destination=S4HANA_RFC_DESTINATION, cmdVariantUri=ctype::AdapterVariant/cname::sap:RFC/tp::RFC/mp::Synchronous RFC/direction::Receiver/version::1.2.1
+```
+
+No "Unsupported component type: RFC" error occurs anywhere in this path.
+
+---
+
+## 8. Known limitations
+
+- If a future real SAP export ever shows a genuine mid-flow RFC shape
+  (analogous to `JdbcCall`), this normalization layer would need to be
+  reconsidered -- it currently assumes, on the evidence available, that
+  RFC has no such shape at all.
+- The normalization only recognizes the literal `type: "RFC"` spelling in
+  `components[]`; it does not attempt to detect other AI phrasings of the
+  same mistake (out of scope for a compiler-side fix -- the underlying
+  AI/system-prompt layer is explicitly out of scope for this change).
