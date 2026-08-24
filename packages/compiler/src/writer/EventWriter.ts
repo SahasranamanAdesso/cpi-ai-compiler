@@ -52,8 +52,15 @@ export class EventWriter {
             lines.push(`    <bpmn2:outgoing>${flowId}</bpmn2:outgoing>`);
         });
 
-        // Add messageEventDefinition for start/end events
-        lines.push(`    <bpmn2:messageEventDefinition/>`);
+        // Add messageEventDefinition for start/end events -- but only when
+        // this event is actually message-triggered (the default, and the
+        // only shape used before Local Integration Process support was
+        // added). A Local Integration Process's internal start/end events
+        // are plain (see BpmnNode.isMessageEvent doc) and must omit this
+        // element entirely, per evidence.
+        if (node.isMessageEvent) {
+            lines.push(`    <bpmn2:messageEventDefinition/>`);
+        }
 
         lines.push(`</bpmn2:${node.type}>`);
 

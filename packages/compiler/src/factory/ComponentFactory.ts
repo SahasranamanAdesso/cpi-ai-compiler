@@ -92,6 +92,67 @@ function normalizeXsdPath(xsd: string, xmlSchemaSource: unknown): string {
 }
 
 /**
+ * SAP Content Modifier ("Enricher") body-modification-type values seen in
+ * real exports: "constant" (OrderProcessingWithJDBC.json;
+ * ComponentRegistry.Enricher.metadata.defaultProperties) and "expression"
+ * (process_direct_reference.zip, CallActivity_53 "Set Error Details" inside
+ * the Local Integration Process). Both are lowercase in every real export --
+ * SAP is case-sensitive here, so a value like "Expression" is silently
+ * accepted by this compiler today but produces a Content Modifier step SAP
+ * treats as unconfigured (shown with its generic palette description,
+ * "Modifies incoming message with additional information", instead of
+ * actually running). No other bodyType value has been observed in any
+ * export in this repo, so anything else is rejected rather than guessed.
+ */
+const CONTENT_MODIFIER_BODY_TYPES = ['constant', 'expression'];
+
+/**
+ * Validates and normalizes a ContentModifier ("Enricher") config's
+ * properties against the real, evidence-backed schema
+ * (ComponentRegistry.Enricher.metadata.defaultProperties: bodyType,
+ * wrapContent, propertyTable, headerTable -- see ComponentRegistry.ts).
+ *
+ * This does NOT invent new properties or reject properties beyond this set
+ * (ComponentMapper already merges in registry defaults for anything left
+ * unset, and passes through anything else the caller supplies). It exists
+ * because ComponentFactory previously passed every property straight
+ * through with zero validation, which let a wrong-typed or wrong-cased
+ * value silently reach the generated .iflw and produce a Content Modifier
+ * step that does nothing (root cause of the reported "Prepare Order Data"
+ * bug: `bodyType: "Expression"` (wrong case) + `wrapContent: false` (wrong
+ * type -- serialized as the literal string "false", not real content)).
+ *
+ * @throws if bodyType is present but isn't "constant"/"expression"
+ *         (case-insensitively); if wrapContent/propertyTable/headerTable
+ *         are present but not strings.
+ */
+function validateContentModifierProperties(properties: Record<string, any>): Record<string, any> {
+    const validated = { ...properties };
+
+    if (validated.bodyType !== undefined) {
+        const normalized = String(validated.bodyType).toLowerCase();
+        if (!CONTENT_MODIFIER_BODY_TYPES.includes(normalized)) {
+            throw new Error(
+                `Invalid ContentModifier bodyType: ${JSON.stringify(validated.bodyType)}. ` +
+                `Supported values: ${CONTENT_MODIFIER_BODY_TYPES.join(', ')}.`
+            );
+        }
+        validated.bodyType = normalized;
+    }
+
+    for (const key of ['wrapContent', 'propertyTable', 'headerTable']) {
+        if (validated[key] !== undefined && typeof validated[key] !== 'string') {
+            throw new Error(
+                `ContentModifier property "${key}" must be a string (got ${typeof validated[key]}: ${JSON.stringify(validated[key])}). ` +
+                `${key === 'wrapContent' ? 'It holds the actual message body content/expression, not a flag.' : 'It holds SAP\'s "<row>...</row>"-encoded table markup, not a flag.'}`
+            );
+        }
+    }
+
+    return validated;
+}
+
+/**
  * Normalizes all string values in a config object
  */
 function normalizeConfig(config: Record<string, any>): Record<string, any> {
@@ -194,6 +255,16 @@ export interface IFlowJson {
     connections?: ConnectionConfig[];
     resources?: ResourceConfig[];
     subProcesses?: Array<{
+        /**
+         * Logical reference key for this Local Integration Process, used by
+         * a ProcessCall component's `config.processId` anywhere in this
+         * JSON (main components, another subProcess, or an
+         * exceptionSubprocess) to target it -- resolved automatically to
+         * the actual generated technical process id by fromJson(). Falls
+         * back to `name` as the lookup key if omitted, but an explicit `id`
+         * is recommended since two subProcesses could share a display name.
+         */
+        id?: string;
         name: string;
         components?: Array<{
             id?: string;
@@ -245,6 +316,45 @@ function resolveComponentId(rawId: string | undefined, type: string, usedIds: Se
 }
 
 /**
+ * Resolves a ProcessCall's `config.processId` from the AI-supplied logical
+ * subProcess reference key (the `id`, or `name` if no `id` was given -- see
+ * `IFlowJson.subProcesses[].id`) to the actual generated technical id of the
+ * matching LocalIntegrationProcess.
+ *
+ * Root cause this fixes ("The assigned Local Integration Process does not
+ * exist" in SAP): a ProcessCall's `processId` must equal the exact `id` of a
+ * `<bpmn2:process>` element declared elsewhere in the same .iflw (evidence:
+ * process_direct_reference.zip, CallActivity_45's `processId=Process_49`
+ * exactly matches the sibling `<bpmn2:process id="Process_49">`). Callers
+ * building AI JSON have no way to predict that generated technical id ahead
+ * of time, so without this resolution step `processId` was always either a
+ * made-up string (matching nothing) or required the caller to already know
+ * SAP-internal id generation -- neither is workable. This lets the caller
+ * write a human-chosen key instead and resolves it here, exactly the same
+ * way `componentMap` already resolves connection `from`/`to` by the AI's
+ * own component ids.
+ *
+ * A `processId` that doesn't match any declared subProcess is left
+ * unchanged (not an error here) -- `validate()`'s PC-001 check catches that
+ * case explicitly, with a clearer message than a thrown exception this deep
+ * in construction would give.
+ */
+function resolveProcessCallProcessId(
+    type: string,
+    config: ComponentConfig,
+    subProcessMap: Map<string, LocalIntegrationProcess>
+): ComponentConfig {
+    if (type !== 'ProcessCall' || config.processId === undefined) {
+        return config;
+    }
+    const target = subProcessMap.get(config.processId);
+    if (!target) {
+        return config;
+    }
+    return { ...config, processId: target.id };
+}
+
+/**
  * Creates a processing component from type and configuration
  *
  * @param type - Component type (ContentModifier, Router, GroovyScript, etc.)
@@ -291,14 +401,15 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
 
     switch (type) {
         case 'ContentModifier':
-            // Map to Enricher registry key
-            // Properties are passed as-is to the Component
-            // The compiler will handle conversion to SAP format
+            // Map to Enricher registry key. Properties are validated against
+            // the real schema (bodyType/wrapContent/propertyTable/headerTable
+            // -- see validateContentModifierProperties()) then passed through;
+            // ComponentMapper merges in registry defaults for anything unset.
             return new Component(
                 id || IdGenerator.next('Enricher'),
                 componentName,
                 'Enricher',
-                properties
+                validateContentModifierProperties(properties)
             );
 
         case 'Router':
@@ -749,6 +860,32 @@ export function fromJson(json: IFlowJson): IFlow {
     // (see resolveComponentId() for why this exists / CP-001 root cause).
     const usedComponentIds = new Set<string>();
 
+    // Pre-pass: create Local Integration Process "shells" (id/name only) for
+    // every declared subProcess BEFORE any component is created, so a
+    // ProcessCall anywhere in this JSON (main components, another
+    // subProcess, or an exceptionSubprocess -- matches real evidence, where
+    // the ProcessCall lives inside an exception subprocess) can resolve its
+    // `processId` against an AI-supplied logical key to the real generated
+    // technical process id via resolveProcessCallProcessId(). Components and
+    // connections for each subprocess are filled in later, in the "Add
+    // subprocesses" section below, reusing these exact shell instances --
+    // never constructing a second LocalIntegrationProcess per subDef (that
+    // would silently orphan whichever one wasn't the one actually attached
+    // to the flow).
+    const subProcessShells: LocalIntegrationProcess[] = [];
+    const subProcessMap = new Map<string, LocalIntegrationProcess>();
+    if (json.subProcesses) {
+        for (const subDef of json.subProcesses) {
+            const technicalId = subDef.id
+                ? ensureUniqueTechnicalName(toXmlTechnicalName(subDef.id, ''), usedComponentIds)
+                : undefined;
+            const subprocess = new LocalIntegrationProcess(subDef.name, "From Calling Process", {}, technicalId);
+            usedComponentIds.add(subprocess.id);
+            subProcessShells.push(subprocess);
+            subProcessMap.set(subDef.id || subDef.name, subprocess);
+        }
+    }
+
     // Set sender adapter
     if (json.sender) {
         const sender = createAdapter(json.sender.type, 'Sender', json.sender.config);
@@ -765,7 +902,8 @@ export function fromJson(json: IFlowJson): IFlow {
     if (json.components) {
         for (const compDef of json.components) {
             const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
-            const component = createComponent(compDef.type, compDef.config, resolvedId);
+            const resolvedConfig = resolveProcessCallProcessId(compDef.type, compDef.config, subProcessMap);
+            const component = createComponent(compDef.type, resolvedConfig, resolvedId);
             flow.addComponent(component);
 
             // Store mapping from AI ID to actual component. Keyed by the RAW
@@ -802,16 +940,19 @@ export function fromJson(json: IFlowJson): IFlow {
         }
     }
 
-    // Add subprocesses
+    // Add subprocesses (reusing the shells created in the pre-pass above --
+    // see the comment there for why a second `new LocalIntegrationProcess`
+    // per subDef must never happen)
     if (json.subProcesses) {
-        for (const subDef of json.subProcesses) {
-            const subprocess = new LocalIntegrationProcess(subDef.name);
+        json.subProcesses.forEach((subDef, index) => {
+            const subprocess = subProcessShells[index];
 
             // Add subprocess components
             if (subDef.components) {
                 for (const compDef of subDef.components) {
                     const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
-                    const component = createComponent(compDef.type, compDef.config, resolvedId);
+                    const resolvedConfig = resolveProcessCallProcessId(compDef.type, compDef.config, subProcessMap);
+                    const component = createComponent(compDef.type, resolvedConfig, resolvedId);
                     subprocess.addComponent(component);
 
                     componentMap.set(compDef.id || component.id, component);
@@ -831,7 +972,7 @@ export function fromJson(json: IFlowJson): IFlow {
             }
 
             flow.addSubProcess(subprocess);
-        }
+        });
     }
 
     // Add exception subprocesses
@@ -839,11 +980,16 @@ export function fromJson(json: IFlowJson): IFlow {
         for (const exDef of json.exceptionSubprocesses) {
             const exSubprocess = new ExceptionSubprocess(exDef.name);
 
-            // Add exception subprocess components
+            // Add exception subprocess components. Note: real SAP evidence
+            // (process_direct_reference.zip) shows a ProcessCall to a Local
+            // Integration Process is typically placed HERE, inside an
+            // exception subprocess -- so this resolution step matters just
+            // as much as the main-components one above.
             if (exDef.components) {
                 for (const compDef of exDef.components) {
                     const resolvedId = resolveComponentId(compDef.id, compDef.type, usedComponentIds);
-                    const component = createComponent(compDef.type, compDef.config, resolvedId);
+                    const resolvedConfig = resolveProcessCallProcessId(compDef.type, compDef.config, subProcessMap);
+                    const component = createComponent(compDef.type, resolvedConfig, resolvedId);
                     exSubprocess.addComponent(component);
 
                     componentMap.set(compDef.id || component.id, component);

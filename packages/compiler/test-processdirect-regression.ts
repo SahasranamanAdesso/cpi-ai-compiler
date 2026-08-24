@@ -232,7 +232,7 @@ async function main() {
         name: 'Process Direct and ProcessCall Together',
         sender: { type: 'HTTPS', config: { address: '/x' } },
         components: [
-            { id: 'localSubprocess', type: 'ProcessCall', config: { name: 'Local Enrichment', processId: 'enrichment_sub_process' } },
+            { id: 'localSubprocess', type: 'ProcessCall', config: { name: 'Local Enrichment', processId: 'enrichmentSubProcess' } },
             { id: 'remoteFlowCall', type: 'ProcessDirectCall' as any, config: { name: 'Call Remote Flow', address: '/process/remote' } }
         ],
         connections: [
@@ -240,14 +240,35 @@ async function main() {
             { from: 'localSubprocess', to: 'remoteFlowCall' },
             { from: 'remoteFlowCall', to: 'receiver' }
         ],
+        // A ProcessCall's processId must resolve to a declared subProcess --
+        // this is the Local Integration Process fix under test here too.
+        subProcesses: [
+            {
+                id: 'enrichmentSubProcess',
+                name: 'Local Enrichment Subprocess',
+                components: [
+                    { id: 'enrichStep', type: 'ContentModifier', config: { name: 'Enrich', bodyType: 'constant', wrapContent: 'enriched' } }
+                ]
+            }
+        ],
         receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
     };
     const withProcessCallFlow = fromJson(withProcessCallJson);
     const withProcessCallValidation = validate(withProcessCallFlow);
+    console.log('  validate():', JSON.stringify(withProcessCallValidation));
     assert(withProcessCallValidation.valid, 'ProcessCall + ProcessDirectCall flow validates');
     assert(withProcessCallValidation.errors.filter(e => e.code === 'CP-001').length === 0, 'no CP-001 errors between ProcessCall and ProcessDirectCall');
+    assert(withProcessCallValidation.errors.filter(e => e.code === 'PC-001').length === 0, 'ProcessCall resolves correctly to its declared Local Integration Process (no PC-001)');
     const withProcessCallZip = await compileToZip(withProcessCallFlow);
     assert(withProcessCallZip.length > 0, 'ProcessCall + ProcessDirectCall flow compiles');
+    const withProcessCallIflw = readZipEntry(withProcessCallZip, listZipEntries(withProcessCallZip).find(e => e.endsWith('.iflw'))!).toString('utf-8');
+    assert(/<bpmn2:process id="[^"]+" name="Local Enrichment Subprocess">/.test(withProcessCallIflw), 'a sibling <bpmn2:process> for the Local Integration Process exists in the generated .iflw');
+    const processCallMatch = withProcessCallIflw.match(/<bpmn2:callActivity id="localSubprocess"[\s\S]*?<key>processId<\/key>\s*<value>([^<]+)<\/value>/);
+    assert(!!processCallMatch, 'ProcessCall callActivity carries a processId property');
+    if (processCallMatch) {
+        const referencedProcessId = processCallMatch[1];
+        assert(new RegExp(`<bpmn2:process id="${referencedProcessId}" name="Local Enrichment Subprocess">`).test(withProcessCallIflw), `ProcessCall's processId ("${referencedProcessId}") matches an actual <bpmn2:process> id in the .iflw -- this is the exact SAP check behind "The assigned Local Integration Process does not exist"`);
+    }
 
     // ------------------------------------------------------------------
     // [7] Process Direct + JdbcCall coexistence (no ID collisions)
@@ -293,11 +314,11 @@ async function main() {
         name: 'Multi ProcessCall and Multi ProcessDirect',
         sender: { type: 'HTTPS', config: { address: '/x' } },
         components: [
-            { id: 'pc1', type: 'ProcessCall', config: { name: 'Sub Process 1', processId: 'sub_process_1' } },
+            { id: 'pc1', type: 'ProcessCall', config: { name: 'Sub Process 1', processId: 'subProcess1' } },
             { id: 'pd1', type: 'ProcessDirectCall' as any, config: { name: 'Call Flow 1', address: '/process/flow1' } },
-            { id: 'pc2', type: 'ProcessCall', config: { name: 'Sub Process 2', processId: 'sub_process_2' } },
+            { id: 'pc2', type: 'ProcessCall', config: { name: 'Sub Process 2', processId: 'subProcess2' } },
             { id: 'pd2', type: 'ProcessDirectCall' as any, config: { name: 'Call Flow 2', address: '/process/flow2' } },
-            { id: 'pc3', type: 'ProcessCall', config: { name: 'Sub Process 3', processId: 'sub_process_3' } }
+            { id: 'pc3', type: 'ProcessCall', config: { name: 'Sub Process 3', processId: 'subProcess3' } }
         ],
         connections: [
             { from: 'sender', to: 'pc1' },
@@ -307,14 +328,27 @@ async function main() {
             { from: 'pd2', to: 'pc3' },
             { from: 'pc3', to: 'receiver' }
         ],
+        // Three distinct Local Integration Processes, one per ProcessCall --
+        // also exercises duplicate-ID safety for LocalIntegrationProcess
+        // ids themselves (3 subProcesses in one flow).
+        subProcesses: [
+            { id: 'subProcess1', name: 'Subprocess One', components: [{ id: 'sp1Step', type: 'ContentModifier', config: { name: 'Step', bodyType: 'constant', wrapContent: 'x' } }] },
+            { id: 'subProcess2', name: 'Subprocess Two', components: [{ id: 'sp2Step', type: 'ContentModifier', config: { name: 'Step', bodyType: 'constant', wrapContent: 'y' } }] },
+            { id: 'subProcess3', name: 'Subprocess Three', components: [{ id: 'sp3Step', type: 'ContentModifier', config: { name: 'Step', bodyType: 'constant', wrapContent: 'z' } }] }
+        ],
         receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
     };
     const stressFlow = fromJson(stressJson);
     const stressIds = stressFlow.getComponents().map(c => c.id);
     assert(new Set(stressIds).size === stressIds.length, 'all 5 component ids (3 ProcessCall + 2 ProcessDirectCall) are unique');
+    const stressSubProcessIds = stressFlow.getSubProcesses().map(sp => sp.id);
+    assert(new Set(stressSubProcessIds).size === 3, 'all 3 Local Integration Process ids are unique');
     const stressValidation = validate(stressFlow);
+    console.log('  validate():', JSON.stringify(stressValidation));
     assert(stressValidation.valid, 'mixed ProcessCall/ProcessDirectCall flow validates');
     assert(stressValidation.errors.filter(e => e.code === 'CP-001').length === 0, 'no CP-001 duplicate ID errors across mixed ProcessCall/ProcessDirectCall');
+    assert(stressValidation.errors.filter(e => e.code === 'PC-001').length === 0, 'all 3 ProcessCalls resolve correctly to their declared Local Integration Processes (no PC-001)');
+    assert(stressValidation.errors.filter(e => e.code === 'LIP-002').length === 0, 'no duplicate Local Integration Process ids (no LIP-002)');
     const stressZip = await compileToZip(stressFlow);
     const stressIflw = readZipEntry(stressZip, listZipEntries(stressZip).find(e => e.endsWith('.iflw'))!).toString('utf-8');
     const stressAllIds = [...stressIflw.matchAll(/ id="([^"]+)"/g)].map(m => m[1]);

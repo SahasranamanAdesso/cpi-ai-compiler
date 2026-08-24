@@ -5,9 +5,11 @@
  */
 
 import { IFlow } from '../model/IFlow';
+import { Component } from '../model/Component';
 import { Router } from '../model/Router';
 import { JdbcCall } from '../model/JdbcCall';
 import { ProcessDirectCall } from '../model/ProcessDirectCall';
+import { ProcessCall } from '../model/ProcessCall';
 import { isValidXmlNCName } from '../utils/XmlName';
 
 /**
@@ -326,6 +328,77 @@ export function validate(flow: IFlow): ValidationResult {
                 });
             }
         }
+    });
+
+    // PC-001 / LIP-001 / LIP-002: Local Integration Process wiring.
+    //
+    // Root cause of SAP's "The assigned Local Integration Process does not
+    // exist": a ProcessCall's `processId` must equal the exact `id` of a
+    // `<bpmn2:process>` element declared elsewhere in the same .iflw (see
+    // BpmnProcessMapper.mapLocalIntegrationProcess() / ComponentFactory's
+    // subProcesses handling). This was previously never checked -- a
+    // ProcessCall with any string in `processId` passed validate() as
+    // "valid: true" and only failed once imported into SAP.
+    //
+    // Checked across the WHOLE flow (main components, every subProcess's
+    // own components, every exceptionSubprocess's own components) since
+    // real SAP flows commonly place the ProcessCall inside an exception
+    // subprocess rather than the main process -- evidence:
+    // process_direct_reference.zip's CallActivity_45 lives inside
+    // SubProcess_39 ("Exception Subprocess"), not Process_1 directly.
+    const subProcesses = flow.getSubProcesses();
+    const subProcessIds = new Set(subProcesses.map(sp => sp.id));
+
+    const allComponents: Component[] = [
+        ...components,
+        ...subProcesses.flatMap(sp => sp.getComponents()),
+        ...flow.getExceptionSubprocesses().flatMap(ex => ex.getComponents())
+    ];
+
+    allComponents.forEach(component => {
+        if (component instanceof ProcessCall) {
+            const targetId = component.getProcessId();
+            if (!targetId || !subProcessIds.has(targetId)) {
+                errors.push({
+                    severity: 'error',
+                    code: 'PC-001',
+                    message: `ProcessCall "${component.id}" references Local Integration Process "${targetId}" which does not exist in this iFlow. Declare it via the top-level "subProcesses" array (with a matching "id" that this processId references) -- SAP will otherwise reject the flow with "The assigned Local Integration Process does not exist".`,
+                    component: component.id
+                });
+            }
+        }
+    });
+
+    // LIP-001: every Local Integration Process must have a valid XML NCName
+    // id. Defensive backstop -- LocalIntegrationProcess always generates one
+    // via IdGenerator or sanitizes an AI-supplied one, so this should be
+    // unreachable via fromJson(); it exists for the same reason NM-001 does
+    // (hand-built IFlow usage, or a future regression, shouldn't ship
+    // silently).
+    subProcesses.forEach(sp => {
+        if (!sp.id || !isValidXmlNCName(sp.id)) {
+            errors.push({
+                severity: 'error',
+                code: 'LIP-001',
+                message: `Local Integration Process "${sp.name}" has an invalid id (${JSON.stringify(sp.id)}) -- must be a valid XML NCName.`
+            });
+        }
+    });
+
+    // LIP-002: Local Integration Process ids must be unique. Defensive
+    // backstop for hand-built IFlow usage outside fromJson() (which already
+    // dedupes AI-supplied subProcess ids via ensureUniqueTechnicalName
+    // before this point is ever reached).
+    const seenSubProcessIds = new Set<string>();
+    subProcesses.forEach(sp => {
+        if (seenSubProcessIds.has(sp.id)) {
+            errors.push({
+                severity: 'error',
+                code: 'LIP-002',
+                message: `Duplicate Local Integration Process id: ${sp.id}`
+            });
+        }
+        seenSubProcessIds.add(sp.id);
     });
 
     // Resource validation

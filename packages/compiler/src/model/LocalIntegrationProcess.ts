@@ -1,5 +1,6 @@
 import { Component } from "./Component";
 import { Connection } from "./Connection";
+import { IdGenerator } from "../utils/IdGenerator";
 
 /**
  * LocalIntegrationProcess - Reusable subprocess within an integration flow
@@ -58,13 +59,20 @@ export class LocalIntegrationProcess {
      *   - "Required for JDBC": Creates new transaction for database operations
      *   - "Not Required": No transaction management
      * @param additionalProperties - Optional additional SAP properties
+     * @param id - Optional process ID (auto-generated via IdGenerator if not
+     *   provided). A ProcessCall elsewhere in the same iFlow must reference
+     *   this exact ID via its `processId` property for SAP to resolve the
+     *   call -- see ProcessCall.ts and ComponentFactory.fromJson()'s
+     *   subProcesses handling, which resolves an AI-supplied logical
+     *   subprocess id to this technical id automatically.
      */
     constructor(
         name: string,
         transactionalHandling: string = "From Calling Process",
-        additionalProperties: Record<string, any> = {}
+        additionalProperties: Record<string, any> = {},
+        id?: string
     ) {
-        this.id = `Process_${Date.now()}`;
+        this.id = id || IdGenerator.next("Process");
         this.name = name;
         this.components = [];
         this.connections = [];

@@ -1,0 +1,290 @@
+# Commit 3: Local Integration Process / ProcessCall wiring fix + ContentModifier validation
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as [`commit1_jdbc-support-and-naming-fixes.readme`](commit1_jdbc-support-and-naming-fixes.readme)
+and [`commit2_process-direct-support.readme`](commit2_process-direct-support.readme) -- written for both
+future Claude sessions and human contributors, explaining the evidence and
+reasoning behind each decision.
+
+---
+
+## 1. What broke, and why (reported via a real generated ZIP)
+
+A user-generated `.iflw` (`HTTPS_to_ProcessDirect_Flow.iflw`) failed to
+import into SAP with two problems:
+
+1. **"The assigned Local Integration Process does not exist"** on a
+   `ProcessCall` step ("Call Order Process").
+2. **"Prepare Order Data"** (a Content Modifier) rendered as SAP's generic
+   palette description instead of actually running.
+
+### 1a. Root cause: Local Integration Process was modeled but never mapped
+
+`src/model/LocalIntegrationProcess.ts` and `IFlow.addSubProcess()` /
+`getSubProcesses()` already existed, and `ComponentFactory.fromJson()`'s
+`subProcesses` JSON array already built `LocalIntegrationProcess` instances
+from it -- but **`BpmnProcessMapper` never called `flow.getSubProcesses()`
+at all**. Confirmed by grep: zero references anywhere in the mapper/writer
+layers. So even a caller who correctly declared a `subProcesses` entry got
+a `.iflw` with nothing for it -- no sibling `<bpmn2:process>`, no
+participant, nothing for a `ProcessCall` to point at.
+
+Separately, there was no mechanism linking a `ProcessCall`'s `processId` to
+the actual technical id SAP needs (`Process_<generated>`, an opaque string
+the AI/caller has no way to predict ahead of time). The reported ZIP's
+`ProcessCall` used `processId: "/process/orders"` -- a value that matches
+nothing, because nothing in the pipeline ever tried to resolve it.
+
+**Evidence for the correct BPMN shape** (this compiler's own
+`process_direct_reference.zip`, used earlier for the Process Direct
+adapter, turns out to also contain a genuine Local Integration Process):
+
+- `Process_49` ("Exception Handling") is a **sibling** `<bpmn2:process>` to
+  the main `Process_1`, NOT nested inside it. `processType=directCall`,
+  `cmdVariantUri=ctype::FlowElementVariant/cname::LocalIntegrationProcess/version::1.1.3`,
+  `componentVersion=1.1`, `transactionalHandling=From Calling Process`.
+- Its start/end events (`StartEvent_50`/`EndEvent_51`) are **plain** --
+  no `<bpmn2:messageEventDefinition/>`, unlike the main process's
+  message-triggered `StartEvent_2`/`EndEvent_2`. Makes sense: a Local
+  Integration Process is invoked programmatically via `ProcessCall`, not
+  triggered by an adapter message.
+- A collaboration participant `Participant_Process_49`
+  (`ifl:type="IntegrationProcess"`, `processRef="Process_49"`) references
+  it, same shape as the main process's own `Participant_Process_1`.
+- The `ProcessCall` (`CallActivity_45`, activityType=ProcessCallElement,
+  cmdVariantUri=.../NonLoopingProcess/version::1.0.4) that invokes it lives
+  **inside an Exception Subprocess** (`SubProcess_39`), with
+  `processId=Process_49` -- an exact string match against the sibling
+  process's `id`. This is the literal SAP check behind "The assigned Local
+  Integration Process does not exist": if that string doesn't match any
+  declared `<bpmn2:process id="...">`, SAP rejects the flow.
+- `Process_49` itself contains `ServiceTask_56` -- a Process Direct
+  `ExternalCall`, i.e. a mid-flow adapter call can live *inside* a Local
+  Integration Process, not just the main process.
+
+### 1b. Root cause: ContentModifier had zero input validation
+
+`ComponentFactory.createComponent('ContentModifier', ...)` passed every
+property straight through with no checks. The reported flow had:
+`bodyType: "Expression"` (capitalized -- every real SAP export in this
+repo uses lowercase `"expression"`/`"constant"`, and SAP is case-sensitive
+here) and `wrapContent: false` (a boolean, serialized as the literal
+string `"false"`, not real content). The result: a Content Modifier with no
+real body configured, which SAP shows with its generic palette description
+("Modifies incoming message with additional information") instead of
+running.
+
+---
+
+## 2. The fix
+
+### 2a. BpmnProcessMapper now maps every Local Integration Process
+
+New private method `mapLocalIntegrationProcess()` builds, for each entry in
+`flow.getSubProcesses()`:
+- A sibling `BpmnProcess` (own `<bpmn2:process>`) with the exact evidenced
+  property set/order (`transactionTimeout`, `processType=directCall`,
+  `componentVersion=1.1`, the `LocalIntegrationProcess/1.1.3` `cmdVariantUri`,
+  `transactionalHandling`).
+- Plain (non-message) start/end events -- `BpmnNode` gained an
+  `isMessageEvent` flag (default `true`, so every existing call site is
+  unaffected) and `EventWriter` now only emits
+  `<bpmn2:messageEventDefinition/>` when it's true.
+- Its own components, mapped via the same `ComponentMapper` the main
+  process uses -- so a Local Integration Process supports everything the
+  main process does (Router, Multicast, JdbcCall, ProcessDirectCall,
+  nested ProcessCall) for free.
+- Its own sequence flows, including Router/Multicast gateway-route
+  metadata -- this logic was extracted from the main process's inline
+  `connections.forEach(...)` block into a shared `buildSequenceFlow()`
+  method so both paths use identical logic without duplicating it. The
+  main process's own ID scheme (`SequenceFlow_3`, `SequenceFlow_${n+4}`,
+  ...) is completely unchanged; only the *route-metadata* logic is shared.
+- A `Participant_LIP_<n>` participant (`ifl:type="IntegrationProcess"`,
+  `processRef=<the process id>`).
+- Mid-flow adapter calls (JDBC, Process Direct) found among its own
+  components -- reusing the existing `mapMidFlowAdapterCall()` via a new
+  `mapMidFlowAdapterCalls()` list-wrapper, applied to both the main
+  process's components and every Local Integration Process's components.
+
+`BpmnDefinitions` gained an `additionalProcesses: BpmnProcess[]` array
+(4th constructor param, defaults to `[]` -- non-breaking), and
+`DefinitionsWriter` now writes each as a sibling `<bpmn2:process>` *before*
+the main process, matching the order observed in the reference export.
+
+The collaboration diagram (`createDiagram()`) was refactored so the main
+process's node/shape/edge logic lives in a new `addProcessNodesAndFlows()`
+method parameterized by an `(originX, originY)` origin, reused for the main
+process (origin `(250, 60)`, producing byte-identical output to before --
+verified) and for each Local Integration Process (a new lane stacked below
+the main one). Any `ifl:type="IntegrationProcess"` participant other than
+`Participant_Process_1` now gets the same full-size lane box treatment.
+
+### 2b. ComponentFactory resolves ProcessCall.processId automatically
+
+`IFlowJson.subProcesses[]` entries gained an optional `id` field -- an
+AI-chosen logical reference key, exactly like `components[].id`. `fromJson()`
+now runs a pre-pass that creates `LocalIntegrationProcess` "shells" (id/name
+only) for every declared `subProcess` *before* any component is created,
+building a `subProcessMap` keyed by `id` (or `name` if no `id` given). A new
+`resolveProcessCallProcessId()` helper rewrites a `ProcessCall`'s
+`config.processId` from that logical key to the real generated technical
+id, applied at all three places a `ProcessCall` can legally appear: main
+`components`, another `subProcess`'s components, and an
+`exceptionSubprocess`'s components (the last one matters because that's
+literally where the real evidence places it). The pre-created shells are
+reused (not re-constructed) when their own components/connections are
+filled in later, so there's never a second, orphaned
+`LocalIntegrationProcess` instance per `subDef`.
+
+`LocalIntegrationProcess` itself gained an optional `id?` constructor param
+(uses `IdGenerator.next("Process")` instead of the old `Date.now()`
+fallback when omitted), matching the pattern already used for
+`ProcessCall`/`JdbcCall`/etc. after the CP-001 fix in commit 1.
+
+### 2c. ContentModifier property validation
+
+New `validateContentModifierProperties()` in `ComponentFactory.ts`:
+- `bodyType`, if present, is normalized case-insensitively against the two
+  evidenced values (`"constant"`, `"expression"`) and rejected if it
+  matches neither -- so `"Expression"` (the reported bug) is silently
+  *corrected*, but an invented value like `"xml"` is rejected outright.
+- `wrapContent` / `propertyTable` / `headerTable`, if present, must be
+  strings -- a boolean (the reported bug's other half) now throws a clear
+  error instead of being serialized as the literal string `"false"`.
+
+This does not add or remove any supported property -- it validates the
+same four properties `ComponentRegistry.Enricher.metadata.defaultProperties`
+already documents, and `ComponentMapper`'s existing default-merging
+behavior (fills in anything left unset) is untouched.
+
+---
+
+## 3. Validation hardening (`validate.ts`)
+
+- **PC-001** -- a `ProcessCall`'s `processId` must match the `id` of a
+  `LocalIntegrationProcess` declared on the flow (`flow.getSubProcesses()`).
+  Checked across the *whole* flow: main components, every subProcess's own
+  components, and every exceptionSubprocess's own components (matching
+  where real evidence places it). This is the exact SAP check behind "The
+  assigned Local Integration Process does not exist" -- previously
+  `validate()` had no opinion on this at all, so `valid: true` could still
+  produce a SAP-rejected ZIP.
+- **LIP-001** -- every Local Integration Process must have a valid XML
+  NCName id (defensive backstop, same rationale as NM-001 -- should be
+  unreachable via `fromJson()`).
+- **LIP-002** -- Local Integration Process ids must be unique (defensive
+  backstop for hand-built `IFlow` usage outside `fromJson()`, which already
+  dedupes AI-supplied subProcess ids before this point).
+
+Items already covered by pre-existing behavior, not touched here:
+"Connections to nonexistent components" (already a hard throw in
+`fromJson()`'s connection-resolution loop) and "Duplicate component IDs"
+(already CP-001, from commit 1).
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `test-localintegrationprocess-regression.ts`
+
+**Modified**:
+- `src/model/LocalIntegrationProcess.ts` (optional `id` param)
+- `src/ir/BpmnNode.ts` (`isMessageEvent` flag)
+- `src/ir/BpmnDefinitions.ts` (`additionalProcesses[]`)
+- `src/writer/EventWriter.ts` (conditional `messageEventDefinition`)
+- `src/writer/DefinitionsWriter.ts` (writes sibling processes)
+- `src/mapper/BpmnProcessMapper.ts` (`mapLocalIntegrationProcess()`,
+  extracted `buildSequenceFlow()` / `mapMidFlowAdapterCalls()`, diagram
+  support for LIP lanes -- verified byte-identical main-process diagram
+  output before/after via direct coordinate comparison)
+- `src/factory/ComponentFactory.ts` (`subProcesses[].id`, pre-pass +
+  `resolveProcessCallProcessId()`, `validateContentModifierProperties()`)
+- `src/api/validate.ts` (PC-001, LIP-001, LIP-002)
+- `src/api/capabilities.ts` (documents the real `ProcessCall` ↔
+  `subProcesses` linkage and the `ContentModifier` schema)
+- `test-naming-version-regression.ts`, `test-processdirect-regression.ts`
+  (both had a pre-existing `ProcessCall` scenario using a made-up
+  `processId` with no matching `subProcess` -- exactly the bug being
+  fixed here. Updated to declare a real matching `subProcesses` entry, which
+  is itself additional regression coverage for the fix.)
+
+**Deliberately not touched**: `ExceptionSubprocess` → BPMN mapping remains
+unmapped (same pre-existing gap as `LocalIntegrationProcess` was, but out of
+scope here -- the reported flow doesn't use exception handling, and
+`exceptionSubprocesses`' *components* are still resolved/validated
+correctly by this fix wherever they contain a `ProcessCall`, only the
+subprocess's own BPMN wrapper element is not yet emitted). Writers,
+packaging logic, existing resource handling, and every other adapter/
+component type are unchanged.
+
+---
+
+## 5. Testing
+
+`test-localintegrationprocess-regression.ts` (same `ts-node` convention as
+commits 1-2), 5 scenario groups, all passing, each checked against the raw
+generated `.iflw` XML (not just `validate()`'s return value):
+
+1. The exact reported scenario (HTTPS → Prepare Order Data → Call Order
+   Process → Create Response → HTTP, with a real Local Integration
+   Process) -- verifies the sibling `<bpmn2:process>`, its evidenced
+   properties, plain start/end events, the participant, and the exact
+   `processId` string match SAP needs, plus the corrected `ContentModifier`
+   output.
+2. `ProcessCall` inside an `exceptionSubprocess` targeting a sibling Local
+   Integration Process (the real evidence's own placement).
+3. Multiple Local Integration Processes in one flow -- no duplicate ids
+   across 55 total generated XML element ids.
+4. PC-001: an unresolvable `ProcessCall` target is rejected, not silently
+   accepted.
+5. `ContentModifier` rejects an invalid `bodyType` and a wrong-typed
+   `wrapContent`; confirms `"Expression"` (wrong case) is normalized
+   rather than rejected.
+
+Additionally regenerated the exact originally-reported flow shape end to
+end and confirmed directly in the output ZIP: the Local Integration
+Process's `<bpmn2:process id="orderProcess">` exists, `Call Order
+Process`'s `processId` property equals `"orderProcess"` exactly, and
+`Prepare Order Data` carries `bodyType="expression"` /
+`wrapContent="${body}"` instead of the broken values.
+
+**Full pre-existing regression suite re-run -- zero regressions**:
+`test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`, `test/run-rt-003-tests.ts` (9/9),
+`test/run-mapping-regression-simple.ts` (3/3) -- all pass, including a
+direct coordinate-by-coordinate check that the main process's diagram
+output is unchanged after the `BpmnProcessMapper` refactor.
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Known limitations
+
+- `ExceptionSubprocess` itself (the `<bpmn2:subProcess
+  activityType="ErrorEventSubProcessTemplate">` wrapper) is still not
+  mapped to BPMN output -- only its *components* are correctly created and
+  validated. A `ProcessCall` declared inside one resolves correctly against
+  a Local Integration Process, but the exception-handling wrapper around it
+  is not yet emitted. Out of scope for this fix (not needed by the reported
+  flow); would need the same evidence-based treatment `LocalIntegrationProcess`
+  just got.
+- Diagram coordinates for multiple Local Integration Process lanes are a
+  reasonable non-overlapping placement, not pixel values pulled from a real
+  export (evidence shows no fixed layout for this since it varies per
+  flow).

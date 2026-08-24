@@ -31,11 +31,24 @@ import { IflProperty } from "./IflProperty";
 export class BpmnNode {
     public readonly iflProperties: IflProperty[] = [];
 
+    /**
+     * @param isMessageEvent - Only meaningful for type "startEvent"/"endEvent".
+     *   Defaults to true (existing behavior, unchanged): the main Integration
+     *   Process's start/end events are triggered by an adapter message and
+     *   carry a `<bpmn2:messageEventDefinition/>`. A Local Integration
+     *   Process's internal start/end events are plain (invoked via
+     *   ProcessCall, not by a message) and must NOT carry one -- evidence:
+     *   process_direct_reference.zip, StartEvent_50/EndEvent_51 inside
+     *   Process_49 (`cmdVariantUri` has no message-event suffix, no
+     *   `messageEventDefinition` element), vs. StartEvent_2/EndEvent_2 in
+     *   the same file's main Process_1 (which do carry one).
+     */
     constructor(
         public readonly id: string,
         public readonly type: string,
         public readonly name: string,
-        public readonly properties: Record<string, any> = {}
+        public readonly properties: Record<string, any> = {},
+        public readonly isMessageEvent: boolean = true
     ) {}
 
     addProperty(key: string, value: string): void {

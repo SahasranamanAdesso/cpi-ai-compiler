@@ -50,7 +50,15 @@ export class DefinitionsWriter {
         // Collaboration
         lines.push(this.indent(this.collaborationWriter.write(definitions.collaboration), "    "));
 
-        // Process
+        // Local Integration Process(es), if any -- written as sibling
+        // <bpmn2:process> elements BEFORE the main process, matching the
+        // order observed in real SAP exports (process_direct_reference.zip:
+        // Process_49 precedes Process_1).
+        definitions.additionalProcesses.forEach(process => {
+            lines.push(this.indent(this.processWriter.write(process), "    "));
+        });
+
+        // Main Integration Process
         lines.push(this.indent(this.processWriter.write(definitions.process), "    "));
 
         // BPMN Diagram (visual layout)

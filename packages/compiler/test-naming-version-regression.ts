@@ -191,6 +191,20 @@ async function main() {
             { from: 'domesticService', to: 'receiver' },
             { from: 'internationalService', to: 'receiver' }
         ],
+        // Each ProcessCall's processId must resolve to a declared Local
+        // Integration Process (PC-001) -- these two give it a real target.
+        subProcesses: [
+            {
+                id: 'domestic_sub_process',
+                name: 'Domestic Sub Process',
+                components: [{ id: 'domesticStep', type: 'ContentModifier', config: { name: 'Process Domestic Invoice', bodyType: 'constant', wrapContent: 'domestic' } }]
+            },
+            {
+                id: 'international_sub_process',
+                name: 'International Sub Process',
+                components: [{ id: 'internationalStep', type: 'ContentModifier', config: { name: 'Process International Invoice', bodyType: 'constant', wrapContent: 'international' } }]
+            }
+        ],
         receiver: { type: 'HTTPS', config: { name: 'Downstream Invoice System', url: 'https://downstream.example.com/invoices', method: 'POST' } },
         resources: [{ type: 'xsd', name: 'InvoiceSchema.xsd', content: INVOICE_SCHEMA_XSD }]
     };

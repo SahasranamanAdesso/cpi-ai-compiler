@@ -81,14 +81,15 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         required: [],
         optional: {
             'name': 'Display name for the component',
-            'bodyType': 'Body modification type',
-            'propertyTable': 'Message properties table',
-            'headerTable': 'Message headers table',
-            'wrapContent': 'Content wrapping configuration'
+            'bodyType': 'Body modification type -- "constant" or "expression" (case-insensitive, normalized to lowercase). Omit if this Content Modifier only sets headers/properties and should leave the body untouched.',
+            'propertyTable': 'SAP\'s "<row>...</row>"-encoded exchange-property assignment table (string). Leave unset if not setting properties.',
+            'headerTable': 'SAP\'s "<row>...</row>"-encoded header assignment table (string). Leave unset if not setting headers.',
+            'wrapContent': 'The actual message body content/expression to set (string) -- required for bodyType to have any effect. NOT a boolean flag.'
         },
         example: {
             name: 'Set Country Header'
-        }
+        },
+        notes: 'bodyType must be "constant" (wrapContent is a literal string) or "expression" (wrapContent is a SAP simple-expression string, e.g. "${header.orderId}") -- any other value, or a non-string wrapContent/propertyTable/headerTable, is rejected rather than silently accepted, since that previously produced a Content Modifier step SAP shows as unconfigured ("Modifies incoming message with additional information") instead of actually running.'
     },
     'Router': {
         required: [],
@@ -212,8 +213,9 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         },
         example: {
             name: 'Call Data Lookup',
-            processId: 'subprocess_id'
-        }
+            processId: 'dataLookupProcess'
+        },
+        notes: 'Invokes a Local Integration Process declared in the SAME iFlow -- NOT another integration flow (use ProcessDirectCall for that). `processId` must match the `id` of an entry in the top-level "subProcesses" array (falls back to that entry\'s "name" if no "id" was given); fromJson() resolves this reference automatically to the real generated process id. A `processId` that does not match any declared subProcess fails validate() with PC-001 ("Local Integration Process does not exist") rather than silently producing a ZIP SAP will reject on import. Example: { "subProcesses": [{ "id": "dataLookupProcess", "name": "Data Lookup", "components": [...], "connections": [...] }] } alongside a ProcessCall component with processId: "dataLookupProcess".'
     },
     'JdbcCall': {
         required: ['dataSourceAlias'],
