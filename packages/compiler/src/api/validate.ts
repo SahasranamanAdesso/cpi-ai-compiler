@@ -34,6 +34,9 @@ import { isValidXmlNCName } from '../utils/XmlName';
  *     -- unlike Process Direct, JMS's two directions genuinely use
  *     DIFFERENT componentVersions (confirmed directly from evidence, not
  *     normalized to match each other).
+ *   - AMQP Sender is version 1.7, matching amqp_reference.zip ("Send
+ *     Outbound Batch Material Replication from S4HANA to D3.iflw") -- no
+ *     Receiver entry, since no AMQP receiver is evidenced.
  *
  * Deliberately scoped to just these adapters (not SOAP/SFTP/IDoc/OData) --
  * this compiler has no reference evidence contradicting those adapters'
@@ -46,7 +49,8 @@ const KNOWN_ADAPTER_VERSIONS: Record<string, Partial<Record<'Sender' | 'Receiver
     'JDBC': { Receiver: '1.5' },
     'ProcessDirect': { Sender: '1.1', Receiver: '1.1' },
     'RFC': { Receiver: '1.2' },
-    'JMS': { Sender: '1.3', Receiver: '1.5' }
+    'JMS': { Sender: '1.3', Receiver: '1.5' },
+    'AMQP': { Sender: '1.7' }
 };
 
 /**
@@ -135,6 +139,22 @@ function checkAdapterOutput(adapter: any, direction: 'Sender' | 'Receiver', labe
                 severity: 'error',
                 code: 'AD-011',
                 message: `${label} JMS ${queueKey} must be a non-empty string (got: ${JSON.stringify(queueName)})`
+            });
+        }
+    }
+
+    // AD-012: AMQP `destinationName` must be a non-empty string -- the
+    // adapter is meaningless without it (it names the SAP Event Mesh
+    // queue/topic to consume from). AmqpAdapter already enforces this at
+    // construction time, so this is a regression guard, same rationale as
+    // NM-001/AD-009/AD-010/AD-011.
+    if (componentType === 'AMQP') {
+        const destinationName = adapter.properties?.destinationName;
+        if (typeof destinationName !== 'string' || destinationName.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-012',
+                message: `${label} AMQP destinationName must be a non-empty string (got: ${JSON.stringify(destinationName)})`
             });
         }
     }

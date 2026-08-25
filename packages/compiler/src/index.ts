@@ -75,6 +75,7 @@ export { JdbcAdapter } from './model/JdbcAdapter';
 export { ProcessDirectAdapter } from './model/ProcessDirectAdapter';
 export { RfcAdapter } from './model/RfcAdapter';
 export { JmsAdapter } from './model/JmsAdapter';
+export { AmqpAdapter } from './model/AmqpAdapter';
 
 // ============================================================================
 // PUBLIC API - Mapper Layer

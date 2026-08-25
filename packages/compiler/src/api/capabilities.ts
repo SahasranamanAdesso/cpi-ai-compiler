@@ -278,6 +278,19 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         required: [],
         optional: {},
         notes: 'Not a real component -- see capabilities.adapters for "JMS" (Sender and Receiver). Calling createComponent(\'JMS\', ...) directly throws a clear error explaining this.'
+    },
+    'AMQP': {
+        // AMQP is NOT a real component type -- it has no mid-flow BPMN
+        // representation in SAP Cloud Integration either (evidence:
+        // amqp_reference.zip shows only a Sender flow-level messageFlow,
+        // never a serviceTask/callActivity). This entry exists only so
+        // `ComponentType` type-checks; it is NEVER present in
+        // getCapabilities().components. Use the 'AMQP' entry under
+        // capabilities.adapters (Sender only) instead -- declare it as
+        // `sender: { type: "AMQP", config: {...} }`, not as a component.
+        required: [],
+        optional: {},
+        notes: 'Not a real component -- see capabilities.adapters for "AMQP" (Sender only). Calling createComponent(\'AMQP\', ...) directly throws a clear error explaining this.'
     }
 };
 
@@ -544,7 +557,36 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 queueName: 'IDocProcessing'
             }
         }
-    }
+    },
+    'AMQP': {
+        // No 'Receiver' entry: no AMQP receiver is evidenced in the
+        // reference export (amqp_reference.zip) -- AMQP here is SAP Event
+        // Mesh's AMQP 1.0 adapter, always a Sender consuming from a
+        // queue/topic to trigger the flow. Not RabbitMQ-style AMQP 0.9.1 --
+        // no exchange/routingKey/virtualHost concept exists.
+        'Sender': {
+            required: ['destinationName'],
+            optional: {
+                'name': 'Display name',
+                'system': 'Name of the sender system shown in the collaboration diagram (defaults to name)',
+                'host': 'Event Mesh messaging gateway host (no generic default -- tenant-specific)',
+                'port': 'Event Mesh messaging gateway port (no generic default -- tenant-specific)',
+                'path': 'WebSocket path, e.g. "/protocols/amqp10ws" (no generic default -- tenant-specific)',
+                'authentication': 'Authentication method name (no generic default -- tenant-specific)',
+                'credentialName': 'Credential name configured in SAP Integration Suite (no generic default -- tenant-specific)',
+                'connectWithTLS': 'Whether to connect using TLS (default: true)',
+                'disableReplyTo': 'Whether to disable the reply-to header (default: false)',
+                'numberConcurrentProcesses': 'Number of concurrent processes consuming the destination (default: 1)',
+                'maxRetries': 'Maximum number of retries (default: 1)',
+                'queuePrefetch': 'Number of messages to prefetch (default: 5)',
+                'consumeExpiredMessages': 'Whether to consume expired messages (default: false)',
+                'deliveryState': 'Delivery state on failure, e.g. "REJECTED" (no generic default -- tenant-specific)'
+            },
+            example: {
+                destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue'
+            }
+        }
+    } as any
 };
 
 /**
@@ -603,7 +645,7 @@ export function getCapabilities(): Capabilities {
     // Build adapter capabilities
     const adapters: AdapterCapability[] = [];
 
-    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect', 'RFC', 'JMS'] as AdapterType[]) {
+    for (const adapterType of ['HTTP', 'HTTPS', 'OData', 'SFTP', 'SOAP', 'IDoc', 'JDBC', 'ProcessDirect', 'RFC', 'JMS', 'AMQP'] as AdapterType[]) {
         for (const direction of ['Sender', 'Receiver'] as AdapterDirection[]) {
             const requirements = ADAPTER_REQUIREMENTS[adapterType]?.[direction];
             if (!requirements) {

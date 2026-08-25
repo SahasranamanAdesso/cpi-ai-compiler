@@ -12,6 +12,7 @@ import { JdbcAdapter } from "./JdbcAdapter";
 import { ProcessDirectAdapter } from "./ProcessDirectAdapter";
 import { RfcAdapter } from "./RfcAdapter";
 import { JmsAdapter } from "./JmsAdapter";
+import { AmqpAdapter } from "./AmqpAdapter";
 
 /**
  * IFlow - Internal Representation (IR) of a CPI Integration Flow
@@ -59,11 +60,15 @@ export class IFlow {
     private readonly exceptionSubprocesses: ExceptionSubprocess[] = [];
 
     /**
-     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, Process Direct, JMS, etc.)
+     * Sender adapter (HTTP, OData, SFTP, SOAP, IDoc, Process Direct, JMS,
+     * AMQP, etc.)
      * Note: JdbcAdapter/RfcAdapter are receiver-only (no JDBC/RFC Sender
      * exists in SAP CPI) and are intentionally excluded from this union.
+     * AmqpAdapter, conversely, is Sender-only (evidence: amqp_reference.zip
+     * shows only a Sender AMQP messageFlow, no Receiver) and is
+     * intentionally excluded from the `receiver` union below.
      */
-    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter;
+    private sender?: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter | AmqpAdapter;
 
     /**
      * Receiver adapter (HTTP, OData, SFTP, SOAP, IDoc, JDBC, Process Direct, RFC, JMS, etc.)
@@ -191,10 +196,10 @@ export class IFlow {
 
     /**
      * Sets the sender adapter for this integration flow
-     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, Process Direct, or JMS sender adapter
+     * @param adapter - HTTP, OData, SFTP, SOAP, IDoc, Process Direct, JMS, or AMQP sender adapter
      * @returns this IFlow instance for method chaining
      */
-    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter): IFlow {
+    public setSender(adapter: HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter | AmqpAdapter): IFlow {
         this.sender = adapter;
         return this;
     }
@@ -203,7 +208,7 @@ export class IFlow {
      * Gets the sender adapter
      * @returns Sender adapter or undefined
      */
-    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter | undefined {
+    public getSender(): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | ProcessDirectAdapter | JmsAdapter | AmqpAdapter | undefined {
         return this.sender;
     }
 

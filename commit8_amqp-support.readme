@@ -1,0 +1,301 @@
+# Commit 8: AMQP Sender adapter support (SAP Event Mesh)
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-7 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What this commit adds: AMQP support
+
+The compiler previously had no AMQP adapter. This adds it, following the
+same evidence-based methodology as JDBC/Process Direct/RFC/JMS -- a real
+SAP-exported AMQP iFlow ZIP (`amqp_reference.zip`, `.iflw`: *"Send Outbound
+Batch Material Replication from S4HANA to D3"*) was inspected first, before
+writing any code.
+
+### Critical finding: this is SAP Event Mesh's AMQP 1.0, not RabbitMQ
+
+The task explicitly warned against assuming RabbitMQ-style AMQP 0.9.1
+configuration. Evidence confirms this warning was warranted: the reference
+shows `system=EventMesh`, `MessageProtocol=AMQP1.0`,
+`TransportProtocol=WS` (WebSocket transport), and a single unified
+`destinationName` property (AMQP 1.0's own addressing concept, covering
+both queue and topic). **No `exchange`, `routingKey`, `virtualHost`,
+`username`, `password`, or `connectionFactory` property exists anywhere in
+this export** -- those are RabbitMQ/AMQP 0.9.1 concepts that do not apply
+here, and none of them were implemented.
+
+### AMQP's shape (determined from evidence, not assumed)
+
+- **Sender only.** The reference has exactly one AMQP messageFlow
+  (`MessageFlow_882`, `sourceRef="Participant_1" targetRef="StartEvent_2"`)
+  -- Participant → StartEvent, the same flow-level shape every other sender
+  adapter in this compiler uses. No Receiver AMQP messageFlow and no
+  mid-flow serviceTask/callActivity pattern exist anywhere in the export.
+  Per the task's explicit instruction to implement only the roles actually
+  supported, this compiler models **AMQP Sender only** -- no Receiver, no
+  mid-flow "AmqpCall" component.
+
+**New file**: `src/model/AmqpAdapter.ts` -- a single `.sender()` static
+factory, mirroring `RfcAdapter.ts`'s single-direction structure. Full
+property set taken verbatim from the reference export:
+
+```
+ComponentType=AMQP, ComponentNS=sap, TransportProtocol=WS,
+MessageProtocol=AMQP1.0, componentVersion=1.7, TransportProtocolVersion=1.8.0,
+MessageProtocolVersion=1.8.0, ComponentSWCVId=1.8.0, direction=Sender,
+proxyType=none, Description="", location_id="", proxyPort="", proxyHost=""
+cmdVariantUri: ctype::AdapterVariant/cname::sap:AMQP/tp::WS/mp::AMQP1.0/direction::Sender/version::1.7.0
+```
+
+**Confirmed asymmetry preserved exactly, not normalized away**: the
+`cmdVariantUri` version suffix (`1.7.0`) matches `componentVersion` (`1.7`),
+while `TransportProtocolVersion`/`MessageProtocolVersion`/`ComponentSWCVId`
+are the *different* value `1.8.0` -- the same shape of asymmetry already
+confirmed for JMS's Sender in commit 7.
+
+### Configurable properties -- all 13 confirmed via `parameters.propdef`
+
+`parameters.propdef`'s `param_references` (all under
+`attribute_category="EventMesh"`/`"EventMesh.Auth"`) confirm **exactly**
+these 13 externalizable properties -- no more, no less:
+
+| Property | Evidenced type | Treatment |
+|---|---|---|
+| `destinationName` | `xsd:string` | **Required** -- the adapter is meaningless without it |
+| `host`, `port`, `path`, `authentication`, `credentialName`, `deliveryState` | string/integer, `isCombobox` on 2 | Optional, **no generic default** -- evidenced values are this one tenant's specific Event Mesh URL/credential/workflow data, not safe to bake in as a default for every future flow |
+| `connectWithTLS`, `disableReplyTo`, `consumeExpiredMessages` | `xsd:boolean` | Optional, defaults to evidenced values (true/false/false) -- generic safety/tuning knobs, not tenant secrets |
+| `numberConcurrentProcesses`, `maxRetries`, `queuePrefetch` | `xsd:integer` | Optional, defaults to evidenced values (1/1/5) -- generic tuning knobs |
+
+`location_id`, `proxyType`, `proxyHost`, `proxyPort` are **not** exposed as
+configurable -- nothing in this export shows them ever externalized or
+non-empty, so they are fixed at their evidenced literal values
+(`""`, `"none"`, `""`, `""`).
+
+**Boolean serialization**: every boolean-shaped AMQP property in this
+export is externalized (a `{{...}}` placeholder), so there is no direct
+evidence of AMQP's own inline literal encoding the way JMS's confirmed
+`"1"`/`"0"` convention was found in commit 7. This implementation follows
+the compiler's *dominant* convention (`HttpAdapter`/`JdbcAdapter`/
+`ProcessDirectAdapter`/`RfcAdapter` all use `"true"`/`"false"`) absent
+contradicting evidence for AMQP specifically -- documented as an inference,
+not fabricated evidence, in `AmqpAdapter.ts`'s own comments.
+
+---
+
+## 2. Wiring (same touchpoints as every other flow-level adapter)
+
+- `IFlow.ts` -- `AmqpAdapter` added to the `sender` field type union only
+  (the mirror image of RFC/JDBC, which are receiver-only).
+- `ComponentFactory.ts` -- `'AMQP'` added to `AdapterType`; `createAdapter()`
+  throws on `Receiver` direction, else spreads the full config into
+  `AmqpAdapter.sender()` (same reasoning as RFC/JMS: no mid-flow component
+  exists to catch an unsupported property, so this is the only place a
+  typo'd/invented property -- including RabbitMQ-style ones -- is rejected
+  end-to-end via `fromJson()`).
+- `capabilities.ts` -- `'AMQP'` adapter capability with **only** a `Sender`
+  entry (mirroring RFC's single-direction shape, flipped), added to the
+  adapter discovery loop.
+- `index.ts` -- exports `AmqpAdapter`.
+
+### The "AMQP as a component" case
+
+`'AMQP'` was added to `ComponentType` purely so `createComponent()` has a
+real `case 'AMQP'` that throws a specific, actionable error ("AMQP has no
+mid-flow component representation... use `sender` instead") rather than the
+generic "Unsupported component type: AMQP" -- following the exact pattern
+established for RFC and JMS in commits 5 and 7. `capabilities.components`
+never lists `'AMQP'` (verified by a dedicated test).
+
+---
+
+## 3. Validation hardening (`validate.ts`)
+
+- `KNOWN_ADAPTER_VERSIONS` extended: `'AMQP': { Sender: '1.7' }` (no
+  Receiver entry).
+- **AD-012** -- AMQP `destinationName` must be a non-empty string.
+  `AmqpAdapter` already enforces this at construction time; this is a
+  regression guard, same rationale as AD-009/AD-010/AD-011.
+
+`checkAdapterOutput()` already runs against `flow.getSender()` generically,
+so AMQP gets NM-001 (channel name NCName) and AD-007 (component-version
+allowlist) checks with no new call site needed.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `src/model/AmqpAdapter.ts`
+- `test-amqp-regression.ts`
+
+**Modified**:
+- `src/model/IFlow.ts` (`AmqpAdapter` added to the `sender` type union)
+- `src/factory/ComponentFactory.ts` (`'AMQP'` adapter type, `createAdapter()`
+  case, `'AMQP'` component type with an actionable rejection message)
+- `src/api/capabilities.ts` (`'AMQP'` adapter capability, Sender only;
+  `COMPONENT_REQUIREMENTS['AMQP']` type-completeness entry, never rendered
+  in `capabilities.components`)
+- `src/api/validate.ts` (AD-012, `KNOWN_ADAPTER_VERSIONS` entry)
+- `src/index.ts` (`AmqpAdapter` export)
+
+**Deliberately not touched**: no new writer was needed (AMQP compiles to
+the exact same `<bpmn2:messageFlow>` shape every flow-level sender adapter
+already uses), no mid-flow component model, no AMQP Receiver, the BPMN IR,
+packaging logic, existing resource handling (the reference export does
+carry mapping/XSLT/XSD/groovy resources, but none are wired to the AMQP
+adapter itself -- they belong to unrelated processing steps elsewhere in
+that customer's flow, confirmed by inspection, so nothing AMQP-specific was
+added to resource handling), the Fiori UI, the CAP controller/`downloadFlow`
+handling, any AI/system-prompt logic, the sequence-flow fix from commit 6
+(re-verified working correctly for all AMQP scenarios), and every other
+adapter/component type -- RFC and JMS in particular, explicitly re-verified
+unmodified via their own full regression suites.
+
+---
+
+## 5. Testing
+
+`test-amqp-regression.ts` (same `ts-node` convention as commits 1-7), 11
+scenario groups, all passing, each checked against the raw generated
+`.iflw` XML:
+
+1. `getCapabilities()` exposes AMQP Sender, explicitly confirms no
+   Receiver entry and no component entry.
+2. AMQP Sender → HTTPS Receiver (the primary supported scenario) --
+   confirms the exact evidenced property set/values, the exact
+   `cmdVariantUri`, the fixed `proxyType`/`location_id` defaults, and the
+   confirmed `componentVersion` (1.7) vs. `TransportProtocolVersion` (1.8.0)
+   asymmetry.
+3. AMQP Sender → ContentModifier → HTTPS Receiver.
+4-6. (folded into 2-3) `fromJson()` → `validate()` → `compileToZip()` for
+   every scenario, plus structural `.iflw` checks.
+7. Missing `destinationName` rejected.
+8. **Seven** RabbitMQ-style invented properties explicitly rejected one by
+   one (`exchange`, `routingKey`, `virtualHost`, `username`, `password`,
+   `connectionFactory`, `queueName`) -- directly exercising the task's
+   explicit warning not to assume these exist.
+9. AMQP `Receiver` direction rejected (no Receiver is evidenced).
+10. AMQP declared as a `components[]` entry rejected with an actionable
+    error (not the generic message), both via `fromJson()` and via
+    `createComponent('AMQP', ...)` called directly.
+11. AMQP combined with `ProcessCall` + `JdbcCall` in one flow -- zero
+    duplicate ids across 50 generated XML element ids.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-jms-regression.ts` (all 12 scenarios),
+`test-sequence-flow-regression.ts`, `test-rfc-regression.ts` (all 15
+scenarios), `test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`, `test-localintegrationprocess-regression.ts`,
+`test/run-rt-003-tests.ts` (9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-amqp-regression.ts
+npx ts-node test-jms-regression.ts
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Example generic JSON
+
+```json
+{
+  "name": "Batch Material Replication",
+  "sender": {
+    "type": "AMQP",
+    "config": {
+      "destinationName": "queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue",
+      "system": "EventMesh",
+      "host": "enterprise-messaging-messaging-gateway.cfapps.eu10.hana.ondemand.com",
+      "port": 443,
+      "path": "/protocols/amqp10ws",
+      "authentication": "Transport_OAuth2",
+      "credentialName": "EventMesh_Oauth"
+    }
+  },
+  "receiver": { "type": "HTTPS", "config": { "url": "https://downstream.example.com", "method": "POST" } }
+}
+```
+
+**Required**: `destinationName`. **Optional, no generic default**: `name`,
+`system` (defaults to name), `host`, `port`, `path`, `authentication`,
+`credentialName`, `deliveryState`. **Optional with generic defaults**:
+`connectWithTLS` (true), `disableReplyTo` (false), `numberConcurrentProcesses`
+(1), `maxRetries` (1), `queuePrefetch` (5), `consumeExpiredMessages` (false).
+AMQP may only be used as `sender`, never `receiver`, and never inside
+`components[]`.
+
+---
+
+## 7. Reference-vs-generated comparison
+
+| Property | Reference (`amqp_reference.zip`) | Generated (this compiler) | Match |
+|---|---|---|---|
+| `ComponentType` | `AMQP` | `AMQP` | ✅ |
+| `TransportProtocol` | `WS` | `WS` | ✅ |
+| `MessageProtocol` | `AMQP1.0` | `AMQP1.0` | ✅ |
+| `componentVersion` | `1.7` | `1.7` | ✅ |
+| `TransportProtocolVersion`/`MessageProtocolVersion`/`ComponentSWCVId` | `1.8.0` | `1.8.0` | ✅ |
+| `cmdVariantUri` | `.../direction::Sender/version::1.7.0` | `.../direction::Sender/version::1.7.0` | ✅ |
+| `proxyType` | `none` | `none` | ✅ |
+| `location_id`/`proxyHost`/`proxyPort` | `""` | `""` | ✅ |
+| `direction` | `Sender` | `Sender` | ✅ |
+| messageFlow shape | `Participant → StartEvent` | `Participant_1 → StartEvent_2` | ✅ (same pattern, compiler's own generated IDs) |
+| Configurable properties (`destinationName`, `host`, `port`, `path`, `authentication`, `credentialName`, and the 6 tuning knobs) | tenant-specific / evidenced defaults | pass-through / same evidenced defaults | ✅ |
+| Receiver AMQP | not present | not implemented | ✅ (correctly absent, not invented) |
+| RabbitMQ properties (`exchange`, `routingKey`, `virtualHost`, `username`, `password`, `connectionFactory`) | not present | rejected if supplied | ✅ (correctly absent, not invented) |
+
+No byte-for-byte comparison was performed (IDs, participant names, and
+diagram coordinates naturally differ per-flow) -- structural and property
+equivalence was verified instead, per the task's own instruction.
+
+---
+
+## 8. Confirmation
+
+```
+fromJson({ sender: { type: "AMQP", config: { destinationName: "queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue", ... } }, receiver: HTTPS })
+  -> succeeds
+validate(flow) -> { valid: true, errors: [], warnings: [] }
+compileToZip(flow) -> succeeds, ZIP contains a valid .iflw
+generated messageFlow: sourceRef="Participant_1" targetRef="StartEvent_2" -> ComponentType=AMQP,
+  destinationName=queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue,
+  cmdVariantUri=ctype::AdapterVariant/cname::sap:AMQP/tp::WS/mp::AMQP1.0/direction::Sender/version::1.7.0
+StartEvent_2 has an outgoing sequence flow; EndEvent_2 is reachable from it (commit 6's fix holds for AMQP too)
+```
+
+---
+
+## 9. Known limitations
+
+- `componentVersion`/version fields are pinned to the reference export
+  evidence in this repo, same caveat as every other adapter's version
+  pinning in commits 1-7 -- a newer tenant profile would need a fresh
+  export to confirm, not a guess.
+- Boolean serialization ("true"/"false") is an informed inference from this
+  compiler's dominant convention, not directly evidenced for AMQP (every
+  boolean in the reference is externalized as a `{{...}}` placeholder, so
+  no inline literal exists to check against) -- flagged explicitly in
+  `AmqpAdapter.ts`'s comments in case a future export contradicts it.
+- AMQP declared as a `components[]` entry is rejected with a clear error
+  rather than auto-normalized (matching JMS's approach in commit 7, not
+  RFC's auto-fix in commit 5) -- can be revisited with evidence if the AI
+  is observed making that specific mistake for AMQP.
+- No AMQP-specific resource type was introduced (none evidenced as tied to
+  the adapter itself in this export).

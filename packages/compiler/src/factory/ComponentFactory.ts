@@ -29,6 +29,7 @@ import { ProcessDirectAdapter } from '../model/ProcessDirectAdapter';
 import { ProcessDirectCall } from '../model/ProcessDirectCall';
 import { RfcAdapter } from '../model/RfcAdapter';
 import { JmsAdapter } from '../model/JmsAdapter';
+import { AmqpAdapter } from '../model/AmqpAdapter';
 import { Router } from '../model/Router';
 import { GroovyScript } from '../model/GroovyScript';
 import { DataStore } from '../model/DataStore';
@@ -185,7 +186,8 @@ export type ComponentType =
     | 'JdbcCall'
     | 'ProcessDirectCall'
     | 'RFC'
-    | 'JMS';
+    | 'JMS'
+    | 'AMQP';
 
 /**
  * Supported adapter types
@@ -200,7 +202,8 @@ export type AdapterType =
     | 'JDBC'
     | 'ProcessDirect'
     | 'RFC'
-    | 'JMS';
+    | 'JMS'
+    | 'AMQP';
 
 /**
  * Adapter direction
@@ -611,6 +614,20 @@ export function createComponent(type: ComponentType, config: ComponentConfig, id
                 'or `receiver: { type: "JMS", config: {...} }` instead of a components[] entry.'
             );
 
+        case 'AMQP':
+            // AMQP has no mid-flow BPMN representation in SAP Cloud
+            // Integration either -- evidence (amqp_reference.zip) shows
+            // only a Sender messageFlow (Participant -> StartEvent), the
+            // same flow-level shape as every other sender adapter, never a
+            // serviceTask/callActivity step, and no Receiver at all. Use
+            // `sender: { type: "AMQP", config: {...} }` instead of a
+            // components[] entry.
+            throw new Error(
+                'AMQP has no mid-flow component representation in SAP Cloud Integration -- ' +
+                'it is always a flow-level sender adapter (no AMQP receiver is evidenced either). ' +
+                'Use `sender: { type: "AMQP", config: {...} }` instead of a components[] entry.'
+            );
+
         default:
             throw new Error(`Unsupported component type: ${type}`);
     }
@@ -650,7 +667,7 @@ export function createAdapter(
     type: AdapterType,
     direction: AdapterDirection,
     config: AdapterConfig
-): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter {
+): HttpAdapter | ODataAdapter | SftpAdapter | SoapAdapter | IdocAdapter | JdbcAdapter | ProcessDirectAdapter | RfcAdapter | JmsAdapter | AmqpAdapter {
     // Normalize config (convert Markdown URLs to plain URLs)
     const normalizedConfig = normalizeConfig(config);
 
@@ -852,6 +869,18 @@ export function createAdapter(
                 return JmsAdapter.sender({ ...normalizedConfig } as any);
             }
             return JmsAdapter.receiver({ ...normalizedConfig } as any);
+
+        case 'AMQP':
+            // Like RFC/JMS above, AMQP has no mid-flow call component to
+            // catch an unsupported property, so the full config is spread
+            // through -- AmqpAdapter.sender() itself throws on any key
+            // outside its documented set. Unlike JMS/Process Direct, AMQP
+            // is Sender-only (evidence: amqp_reference.zip has no Receiver
+            // AMQP messageFlow).
+            if (direction === 'Receiver') {
+                throw new Error('AMQP adapter does not support Receiver direction (no AMQP receiver is evidenced in the reference export -- AMQP here is always a Sender consuming from SAP Event Mesh)');
+            }
+            return AmqpAdapter.sender({ ...normalizedConfig } as any);
 
         default:
             throw new Error(`Unsupported adapter type: ${type}`);
