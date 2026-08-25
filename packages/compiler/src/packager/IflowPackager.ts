@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ZipArchive } from 'archiver';
 import { Resource } from '../model/Resource';
+import { ExternalizedParameter } from '../utils/ExternalizedParameters';
 
 /**
  * IflowPackager - Creates complete CPI artifact
@@ -40,12 +41,19 @@ export class IflowPackager {
      * @param flowName - Name of the flow (e.g., "HelloWorld")
      * @param outputZip - Output ZIP path (e.g., /tmp/HelloWorld.zip)
      * @param resources - Optional array of resources to package (scripts, mappings, schemas)
+     * @param externalizedParameters - Optional list of "{{...}}"-placeholder
+     *        properties (from adapter types with real propdef evidence --
+     *        see ExternalizedParameters.ts) that must be registered in
+     *        parameters.prop/parameters.propdef for SAP to treat them as
+     *        actual externalized parameters rather than literal, invalid
+     *        values.
      */
     async package(
         flowDir: string,
         flowName: string,
         outputZip: string,
-        resources?: Resource[]
+        resources?: Resource[],
+        externalizedParameters?: ExternalizedParameter[]
     ): Promise<void> {
 
         // Create MANIFEST.MF
@@ -58,7 +66,7 @@ export class IflowPackager {
         this.createMetainfo(flowDir, flowName);
 
         // Create parameters.prop and parameters.propdef
-        this.createParameters(flowDir);
+        this.createParameters(flowDir, externalizedParameters);
 
         // Package resources if provided
         if (resources && resources.length > 0) {
@@ -151,20 +159,72 @@ export class IflowPackager {
         fs.writeFileSync(metainfoPath, metainfo, 'utf-8');
     }
 
-    private createParameters(flowDir: string): void {
+    /**
+     * Writes parameters.prop and parameters.propdef.
+     *
+     * When no externalized parameters are needed (the common case -- every
+     * adapter type except AMQP, and AMQP flows that use literal values
+     * instead of "{{...}}" placeholders), this produces byte-identical
+     * output to before this method gained parameter support: a bare
+     * timestamped parameters.prop and a "<param_references/>" propdef.
+     * Evidence: SAP reference IPRO_PRODUCT_HTTP/src/main/resources/parameters.propdef.
+     *
+     * When one or more "{{...}}"-placeholder properties ARE present (see
+     * ExternalizedParameters.ts), each gets a real <parameter> definition
+     * plus a <reference> linking the specific adapter attribute to it, and
+     * a KEY= line in parameters.prop -- reproducing the three-piece
+     * structure amqp_reference.zip's own parameters.prop/parameters.propdef
+     * use for its externalized EMHOST/EMPORT/EMUser/etc. parameters. The
+     * default value written to parameters.prop is always an empty string,
+     * never a real infrastructure value -- SAP's own Configure >
+     * Externalized Parameters screen is where a human fills in the real
+     * value after import, exactly matching how a template flow ships.
+     */
+    private createParameters(flowDir: string, externalizedParameters: ExternalizedParameter[] = []): void {
         const resourcesDir = path.join(flowDir, 'src', 'main', 'resources');
 
+        // Dedupe by paramKey: the same placeholder name reused across
+        // multiple properties (unusual, but not prevented) must still only
+        // produce one <parameter> definition and one parameters.prop line --
+        // SAP's own parameters.prop is keyed by parameter name, not by
+        // adapter attribute.
+        const uniqueParams = new Map<string, ExternalizedParameter>();
+        externalizedParameters.forEach(p => {
+            if (!uniqueParams.has(p.paramKey)) {
+                uniqueParams.set(p.paramKey, p);
+            }
+        });
+
         // parameters.prop - Traditional Java properties format with timestamp
-        const paramProp = [
-            `#${new Date().toUTCString()}`,
-            ''
-        ].join('\r\n');
-        fs.writeFileSync(path.join(resourcesDir, 'parameters.prop'), paramProp, 'utf-8');
+        const paramPropLines = [`#${new Date().toUTCString()}`];
+        uniqueParams.forEach(p => paramPropLines.push(`${p.paramKey}=`));
+        fs.writeFileSync(path.join(resourcesDir, 'parameters.prop'), paramPropLines.join('\r\n') + '\r\n', 'utf-8');
 
         // parameters.propdef - XML structure as per SAP format
-        // Evidence: SAP reference IPRO_PRODUCT_HTTP/src/main/resources/parameters.propdef
-        const paramPropdef = '<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>';
+        let paramPropdef: string;
+        if (uniqueParams.size === 0) {
+            paramPropdef = '<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>';
+        } else {
+            const parameterElements = Array.from(uniqueParams.values()).map(p =>
+                `<parameter><key/><name>${this.escapeXml(p.paramKey)}</name><type>xsd:${p.xsdType}</type><isRequired>false</isRequired><constraint/><description/><additionalMetadata/></parameter>`
+            ).join('');
+
+            const referenceElements = externalizedParameters.map(p =>
+                `<reference attribute_category="${this.escapeXml(p.attributeCategory)}" attribute_id="${this.escapeXml(p.attributeId)}" attribute_uilabel="" param_key="${this.escapeXml(p.paramKey)}"/>`
+            ).join('');
+
+            paramPropdef = `<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters>${parameterElements}<param_references>${referenceElements}</param_references></parameters>`;
+        }
         fs.writeFileSync(path.join(resourcesDir, 'parameters.propdef'), paramPropdef, 'utf-8');
+    }
+
+    private escapeXml(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
     }
 
     /**

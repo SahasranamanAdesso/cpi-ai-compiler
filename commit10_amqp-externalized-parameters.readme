@@ -1,0 +1,339 @@
+# Commit 10: Register AMQP placeholders as real SAP externalized parameters
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-9 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What broke (confirmed by inspecting the uploaded generated ZIP)
+
+Commit 9 taught `AmqpAdapter` to accept a `"{{PlaceholderName}}"`-shaped
+string for `host`/`port`/`credentialName` as an alternative to a real
+literal value, on the theory that SAP's own reference export uses exactly
+this syntax and is a validly-importable flow. That theory was **half
+right**: the placeholder syntax is necessary, but not sufficient on its
+own. Inspecting the user-uploaded `flow (28).zip` (this compiler's own
+output) confirmed it:
+
+- `AMQP to HTTP Flow.iflw` correctly contains
+  `<key>host</key><value>{{AMQP_HOST}}</value>` (and the same for
+  `destinationName`/`port`/`credentialName`).
+- But `parameters.prop` is just `#<timestamp>` (no parameter values), and
+  `parameters.propdef` is just `<parameters><param_references/></parameters>`
+  (no parameter definitions, no references at all).
+
+SAP Integration Suite still reported the exact same three errors
+(`Attribute 'Host' is mandatory`, `Attribute 'Credential Name' is
+mandatory`, `Enter a value between 1 and 65535`) -- because a `{{...}}`
+string in a messageFlow property is only exempted from SAP's design-time
+mandatory/format validation when it is **also** registered as a real
+parameter in `parameters.propdef` (with a matching `parameters.prop`
+entry). Without that registration, SAP evaluates the field as a literal
+(invalid) string, `{{AMQP_HOST}}` included.
+
+---
+
+## 2. Reference vs. generated comparison (as requested)
+
+### AMQP XML -- reference (`amqp_reference.zip`, `MessageFlow_882`)
+```xml
+<ifl:property><key>host</key><value>{{EMHOST}}</value></ifl:property>
+<ifl:property><key>port</key><value>{{EMPORT}}</value></ifl:property>
+<ifl:property><key>credentialName</key><value>{{EMUser}}</value></ifl:property>
+```
+
+### AMQP XML -- our generated ZIP (`flow (28).zip`, `MessageFlow_4`)
+```xml
+<key>host</key><value>{{AMQP_HOST}}</value>
+<key>port</key><value>{{AMQP_PORT}}</value>
+<key>credentialName</key><value>{{AMQP_CREDENTIAL}}</value>
+```
+(Placeholder *names* differ because the user's AI JSON chose its own names
+-- that's expected and fine; the shape is correct.)
+
+### parameters.prop -- reference (excerpt)
+```
+EMAUTH=Transport_OAuth2
+EMConcurrent=1
+EMHOST=enterprise-messaging-messaging-gateway.cfapps.eu10.hana.ondemand.com
+EMPORT=443
+EMUser=EventMesh_Oauth
+QUEUNAME=queue\:sap/s4/EMD/Batch_D3_InitialLoad_Queue
+... (38 total parameters across every externalized adapter in that flow)
+```
+
+### parameters.propdef -- reference (AMQP-relevant excerpt)
+```xml
+<parameter><key/><name>EMHOST</name><type>xsd:string</type><isRequired>false</isRequired><constraint/><description/><additionalMetadata/></parameter>
+<parameter><key/><name>EMPORT</name><type>xsd:integer</type><isRequired>false</isRequired><constraint/><description/><additionalMetadata/></parameter>
+<parameter><key/><name>EMUser</name><type>xsd:string</type><isRequired>false</isRequired><constraint/><description/><additionalMetadata/></parameter>
+...
+<param_references>
+  <reference attribute_category="EventMesh" attribute_id="/attrId::host" attribute_uilabel="" param_key="EMHOST"/>
+  <reference attribute_category="EventMesh" attribute_id="/attrId::port" attribute_uilabel="" param_key="EMPORT"/>
+  <reference attribute_category="EventMesh.Auth" attribute_id="/attrId::credentialName" attribute_uilabel="" param_key="EMUser"/>
+  ... (13 EventMesh-related references total)
+</param_references>
+```
+
+### parameters.prop -- our (broken) generated ZIP
+```
+#Tue, 25 Aug 2026 07:47:46 GMT
+```
+
+### parameters.propdef -- our (broken) generated ZIP
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>
+```
+
+### The exact structural difference
+The reference has a `<parameter>` definition **and** a `<reference>`
+entry **and** a `parameters.prop` value for every externalized adapter
+attribute. Our output had the `{{...}}` text in the `.iflw` but **none** of
+the other three pieces -- an incomplete implementation of SAP's
+externalized-parameter mechanism, not a wrong one.
+
+### Which compiler function is responsible
+`IflowPackager.createParameters(flowDir)` (in
+`src/packager/IflowPackager.ts`) -- it unconditionally wrote the empty
+baseline shown above, with **no parameter to the `IFlow` model or its
+adapters at all**, regardless of what any adapter's properties contained.
+This is root cause **B/D combined** from the earlier investigation
+template: the AMQP factory correctly writes the placeholder text (A/C were
+already ruled out), but nothing downstream ever reads that text back out to
+register it as a real parameter.
+
+---
+
+## 3. The fix
+
+### New file: `src/utils/ExternalizedParameters.ts`
+
+A small, focused, reusable utility:
+- `extractPlaceholderKey(value)` -- detects a `"{{Name}}"`-shaped string
+  and returns `"Name"`.
+- `collectExternalizedParameters(flow: IFlow)` -- scans `flow.getSender()`
+  and `flow.getReceiver()` and, **only for adapter types this compiler has
+  real `parameters.propdef` evidence for**, returns one registration
+  `{ paramKey, xsdType, attributeCategory, attributeId }` per
+  placeholder-shaped property found.
+
+**Scope is deliberately narrow**: only `'AMQP'` has a populated property/
+type map right now (`destinationName`/`host`/`credentialName`/`path`/
+`authentication`/`deliveryState` → `xsd:string`; `port`/
+`NumberConcurrentProcesses`/`maxRetries`/`queuePrefetch` → `xsd:integer`;
+`connectWithTLS`/`disableReplyTo`/`consumeExpiredMessages` → `xsd:boolean`
+-- all taken directly from the reference's own 13 `<parameter>` entries).
+Every other adapter type (HTTP, JDBC, RFC, JMS, Process Direct, ...) has no
+entry in this map, so a `"{{...}}"`-shaped value in any of *their*
+properties is **still written through as a literal string with no
+parameter registered, exactly as before this change** -- guessing another
+adapter's registration format without its own propdef evidence would be
+inventing structure, not reproducing it. `attribute_id` uses AMQP's own
+evidenced short form (`/attrId::propertyName`) -- confirmed **different**
+from RFC/JMS/ProcessDirect's own evidenced long form
+(`ctype::AdapterVariant/cname::.../attrId::x`), so this is not a universal
+formula to reuse elsewhere without that adapter's own evidence.
+
+### `IflowPackager.createParameters()` rewritten
+
+Now accepts an optional `externalizedParameters: ExternalizedParameter[]`
+list:
+- **Zero placeholders found** (the overwhelming common case: every
+  non-AMQP flow, and every AMQP flow using literal values) → produces the
+  **exact original baseline output, byte-for-byte** (verified by a
+  dedicated regression test) -- no risk to any existing flow.
+- **One or more placeholders found** → writes one `<parameter>` per unique
+  parameter name, one `<reference>` per adapter attribute (deduped
+  separately, since one parameter name could in principle back multiple
+  attributes), and one `KEY=` line per parameter in `parameters.prop`. The
+  `parameters.prop` value is **always empty** -- never a real or
+  invented-looking infrastructure value; SAP's own Configure > Externalized
+  Parameters screen is where a human fills in the real value after import,
+  which is exactly the state a freshly generated template flow should be
+  in.
+
+### `compile.ts` wiring
+
+`compileToZip()` now calls `collectExternalizedParameters(flow)` and passes
+the result into `packager.package(...)`. `IFlow`'s own model, `AmqpAdapter`,
+`capabilities.ts`'s required/optional schema, and `validate.ts`'s AD-012
+through AD-015 checks are **all unchanged** from commit 9 -- this fix lives
+entirely in the packaging layer, exactly where the gap was.
+
+### `capabilities.ts` note updated
+
+Clarified that supplying a `"{{...}}"` placeholder is now sufficient on its
+own -- the compiler handles the SAP-side registration automatically; the AI
+does not need to do anything beyond using the placeholder string.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `src/utils/ExternalizedParameters.ts`
+
+**Modified**:
+- `src/packager/IflowPackager.ts` -- `createParameters()` rewritten to
+  build real parameter definitions/references when needed, unchanged
+  baseline otherwise; `package()` gained the optional
+  `externalizedParameters` parameter; new small `escapeXml()` helper.
+- `src/api/compile.ts` -- `compileToZip()` computes and passes
+  `externalizedParameters`.
+- `src/api/capabilities.ts` -- AMQP Sender's `notes` field updated to
+  describe the automatic registration.
+- `test-amqp-regression.ts` -- 2 new scenarios.
+
+**Deliberately not touched**: `AmqpAdapter.ts` itself (its placeholder
+acceptance logic from commit 9 was already correct -- the gap was entirely
+downstream, in packaging), `validate.ts`'s AD-012 through AD-015 checks,
+every other adapter/component type, the sequence-flow fix, the BPMN
+mapper/writer layers, the Fiori UI, and the CAP controller/`downloadFlow`
+handling.
+
+---
+
+## 5. Testing
+
+Two new scenarios in `test-amqp-regression.ts` (23 total in the file, all
+passing):
+
+- **[12]** A flow with `destinationName`/`host`/`port`/`credentialName` all
+  set to `"{{...}}"` placeholders: confirms `validate()` succeeds,
+  `compileToZip()` succeeds, the ZIP contains both parameter files, and
+  then checks **every individual piece** against evidence -- `parameters.prop`
+  has a `KEY=` line for each (with an empty default value, never a
+  real-looking one), `parameters.propdef` is not the empty baseline, each
+  `<parameter>` has the evidence-matched `xsd:string`/`xsd:integer` type,
+  and each `<reference>` uses the evidenced short `attribute_id` form with
+  `attribute_category` taken from the configured `system` value.
+- **[13]** A flow with **literal** (non-placeholder) AMQP values: confirms
+  `parameters.propdef` is the **exact original baseline string**, and
+  `parameters.prop` matches the exact original bare-timestamp pattern --
+  proving this fix introduces zero behavioral change for any flow that
+  doesn't use placeholders.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: all 23 AMQP scenarios, `test-jms-regression.ts` (12),
+`test-sequence-flow-regression.ts`, `test-rfc-regression.ts` (15),
+`test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-amqp-regression.ts
+npx ts-node test-jms-regression.ts
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. AI JSON contract (unchanged shape, now actually correct end-to-end)
+
+```json
+{
+  "sender": {
+    "type": "AMQP",
+    "config": {
+      "system": "EventMesh",
+      "destinationName": "{{AMQP_DESTINATION}}",
+      "host": "{{AMQP_HOST}}",
+      "port": "{{AMQP_PORT}}",
+      "credentialName": "{{AMQP_CREDENTIAL}}"
+    }
+  }
+}
+```
+No property name or shape changed from commit 9 -- the AI does not need to
+learn anything new. The difference is entirely in what the compiler now
+produces from that same input.
+
+### Example generated output (this commit)
+```
+parameters.prop:
+  #<timestamp>
+  AMQP_DESTINATION=
+  AMQP_HOST=
+  AMQP_PORT=
+  AMQP_CREDENTIAL=
+
+parameters.propdef:
+  <parameters>
+    <parameter><key/><name>AMQP_DESTINATION</name><type>xsd:string</type>...</parameter>
+    <parameter><key/><name>AMQP_HOST</name><type>xsd:string</type>...</parameter>
+    <parameter><key/><name>AMQP_PORT</name><type>xsd:integer</type>...</parameter>
+    <parameter><key/><name>AMQP_CREDENTIAL</name><type>xsd:string</type>...</parameter>
+    <param_references>
+      <reference attribute_category="EventMesh" attribute_id="/attrId::destinationName" attribute_uilabel="" param_key="AMQP_DESTINATION"/>
+      <reference attribute_category="EventMesh" attribute_id="/attrId::host" attribute_uilabel="" param_key="AMQP_HOST"/>
+      <reference attribute_category="EventMesh" attribute_id="/attrId::port" attribute_uilabel="" param_key="AMQP_PORT"/>
+      <reference attribute_category="EventMesh" attribute_id="/attrId::credentialName" attribute_uilabel="" param_key="AMQP_CREDENTIAL"/>
+    </param_references>
+  </parameters>
+```
+
+---
+
+## 7. Acceptance criteria
+
+1. **TypeScript/compiler tests pass** -- `npx tsc --noEmit` and
+   `npm run build` both clean; full regression suite (see §5) all pass.
+2. **AMQP validation passes** -- `validate()` returns `valid: true` for the
+   placeholder scenario.
+3. **Generated `.iflw` contains host, port, credentialName** -- unchanged
+   from commit 9, re-verified.
+4. **Generated ZIP contains actual parameter definitions/references** --
+   confirmed directly (test [12]).
+5. **`parameters.prop` is not empty when externalized parameters are
+   used** -- confirmed (4 `KEY=` lines present).
+6. **`parameters.propdef` is not just `<param_references/>`** -- confirmed
+   (4 `<parameter>` definitions + 4 populated `<reference>` entries).
+7. **SAP no longer shows the three errors** -- cannot be verified inside
+   this session without a live SAP Integration Suite tenant, but the
+   generated structure now matches the reference's own proven-valid shape
+   property-for-property (same `<parameter>` schema, same `<reference>`
+   schema, same empty-default `parameters.prop` convention) -- the same
+   standard every other adapter/property fix in this project has been held
+   to. **This should be re-verified against a live tenant import before
+   being called fully confirmed**, per the task's own "the actual SAP
+   import/design-time validation behavior is the acceptance criterion"
+   instruction.
+
+---
+
+## 8. Known limitations
+
+- Not re-verified against a live SAP Integration Suite import in this
+  session (no tenant access) -- structural equivalence to the reference was
+  verified instead, which is the same standard this project has used
+  throughout, but the task explicitly flagged that only a real import is
+  fully conclusive. If a live import still shows an error, that would be
+  new evidence to investigate further, not something to guess around.
+- This mechanism only recognizes `"{{...}}"`-shaped **AMQP** properties.
+  Extending it to another adapter type requires that adapter's own
+  `parameters.propdef` evidence (a different real SAP export using
+  placeholders for that adapter) -- reusing AMQP's shape without evidence
+  would repeat the same mistake this commit fixes.
+- `parameters.prop`'s default value is always empty for a newly-registered
+  parameter. If SAP's UI has a different expectation for what a "fresh,
+  unconfigured" externalized parameter's stored value should look like
+  (e.g. some placeholder text rather than a bare empty string), that would
+  need to be confirmed against a live tenant or a fresh reference export
+  showing a never-yet-configured parameter.

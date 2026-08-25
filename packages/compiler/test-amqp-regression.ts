@@ -406,6 +406,79 @@ async function main() {
     assert(dupes.length === 0, `zero duplicate XML element ids across ${allIds.length} total ids (AMQP + JdbcCall + ProcessCall combined)`);
     assertNoOrphanStartEnd(combinedIflw, 'AMQP + JdbcCall + ProcessCall combined');
 
+    // ------------------------------------------------------------------
+    // [12] Placeholder properties are backed by REAL SAP externalized
+    // parameter registrations, not just literal "{{...}}" text sitting in
+    // the .iflw with nothing behind it. Reproduces the exact reported
+    // regression: a generated ZIP with "{{AMQP_HOST}}" etc. in the .iflw
+    // but an empty parameters.prop / "<param_references/>" parameters.propdef,
+    // which SAP still rejects as "Attribute 'Host' is mandatory" etc.
+    // because the field is only exempted from that check when it's
+    // registered as an externalized parameter.
+    // ------------------------------------------------------------------
+    console.log('\n[12] AMQP placeholder properties are registered as real SAP externalized parameters');
+    const placeholderJson: IFlowJson = {
+        name: 'AMQP to HTTP Flow',
+        sender: {
+            type: 'AMQP' as any,
+            config: {
+                system: 'EventMesh',
+                destinationName: '{{AMQP_DESTINATION}}',
+                host: '{{AMQP_HOST}}',
+                port: '{{AMQP_PORT}}',
+                credentialName: '{{AMQP_CREDENTIAL}}'
+            }
+        },
+        receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
+    };
+    const placeholderFlow = fromJson(placeholderJson);
+    assert(validate(placeholderFlow).valid, 'flow with placeholder host/port/credentialName/destinationName validates');
+    const placeholderZip = await compileToZip(placeholderFlow);
+    const placeholderEntries = listZipEntries(placeholderZip);
+
+    const paramPropEntry = placeholderEntries.find(e => e.endsWith('parameters.prop'));
+    const paramPropdefEntry = placeholderEntries.find(e => e.endsWith('parameters.propdef'));
+    assert(!!paramPropEntry, 'ZIP contains parameters.prop');
+    assert(!!paramPropdefEntry, 'ZIP contains parameters.propdef');
+
+    const paramProp = readZipEntry(placeholderZip, paramPropEntry!).toString('utf-8');
+    console.log('  parameters.prop:\n' + paramProp.split('\n').map(l => '    ' + l).join('\n'));
+    assert(paramProp.includes('AMQP_DESTINATION='), 'parameters.prop contains an AMQP_DESTINATION= entry');
+    assert(paramProp.includes('AMQP_HOST='), 'parameters.prop contains an AMQP_HOST= entry');
+    assert(paramProp.includes('AMQP_PORT='), 'parameters.prop contains an AMQP_PORT= entry');
+    assert(paramProp.includes('AMQP_CREDENTIAL='), 'parameters.prop contains an AMQP_CREDENTIAL= entry');
+    assert(!/AMQP_HOST=\S/.test(paramProp), 'parameters.prop default value is empty, never a real/invented infrastructure value');
+
+    const paramPropdef = readZipEntry(placeholderZip, paramPropdefEntry!).toString('utf-8');
+    console.log('  parameters.propdef:\n    ' + paramPropdef);
+    assert(paramPropdef !== '<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>', 'parameters.propdef is NOT just the empty "<param_references/>" baseline');
+    assert(/<parameter><key\/><name>AMQP_HOST<\/name><type>xsd:string<\/type>/.test(paramPropdef), 'parameters.propdef declares a <parameter> for AMQP_HOST with type xsd:string');
+    assert(/<parameter><key\/><name>AMQP_PORT<\/name><type>xsd:integer<\/type>/.test(paramPropdef), 'parameters.propdef declares a <parameter> for AMQP_PORT with type xsd:integer (matching evidence: EMPORT is xsd:integer)');
+    assert(/<parameter><key\/><name>AMQP_CREDENTIAL<\/name><type>xsd:string<\/type>/.test(paramPropdef), 'parameters.propdef declares a <parameter> for AMQP_CREDENTIAL with type xsd:string');
+    assert(/<reference attribute_category="EventMesh" attribute_id="\/attrId::host" attribute_uilabel="" param_key="AMQP_HOST"\/>/.test(paramPropdef), 'parameters.propdef references host -> AMQP_HOST using the evidenced short attribute_id form and the configured system as attribute_category');
+    assert(/<reference attribute_category="EventMesh" attribute_id="\/attrId::port" attribute_uilabel="" param_key="AMQP_PORT"\/>/.test(paramPropdef), 'parameters.propdef references port -> AMQP_PORT');
+    assert(/<reference attribute_category="EventMesh" attribute_id="\/attrId::credentialName" attribute_uilabel="" param_key="AMQP_CREDENTIAL"\/>/.test(paramPropdef), 'parameters.propdef references credentialName -> AMQP_CREDENTIAL');
+    assert(/<reference attribute_category="EventMesh" attribute_id="\/attrId::destinationName" attribute_uilabel="" param_key="AMQP_DESTINATION"\/>/.test(paramPropdef), 'parameters.propdef references destinationName -> AMQP_DESTINATION');
+
+    // ------------------------------------------------------------------
+    // [13] A flow with NO placeholders still produces the exact original
+    // baseline parameters.prop/parameters.propdef -- confirms the fix does
+    // not change output for the common case (every non-placeholder AMQP
+    // flow, and every other adapter type).
+    // ------------------------------------------------------------------
+    console.log('\n[13] A flow with literal (non-placeholder) AMQP values produces the unchanged baseline parameters files');
+    const literalFlow = fromJson({
+        name: 'Literal AMQP Flow',
+        sender: { type: 'AMQP' as any, config: { destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue', host: 'example.com', port: 443, credentialName: 'MyCred' } },
+        receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
+    });
+    const literalZip = await compileToZip(literalFlow);
+    const literalEntries = listZipEntries(literalZip);
+    const literalPropdef = readZipEntry(literalZip, literalEntries.find(e => e.endsWith('parameters.propdef'))!).toString('utf-8');
+    assert(literalPropdef === '<?xml version="1.0" encoding="UTF-8" standalone="no"?><parameters><param_references/></parameters>', 'a flow with no "{{...}}" placeholders produces the exact original baseline parameters.propdef, byte-for-byte unchanged');
+    const literalParamProp = readZipEntry(literalZip, literalEntries.find(e => e.endsWith('parameters.prop'))!).toString('utf-8');
+    assert(/^#.*\r\n$/.test(literalParamProp), 'a flow with no placeholders produces the exact original baseline parameters.prop (just the timestamp comment)');
+
     console.log(`\n=== ${failures === 0 ? 'ALL PASSED' : failures + ' FAILURE(S)'} ===`);
     process.exit(failures === 0 ? 0 : 1);
 }

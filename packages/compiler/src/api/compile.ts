@@ -11,6 +11,7 @@ import { IFlow } from '../model/IFlow';
 import { BpmnProcessMapper } from '../mapper/BpmnProcessMapper';
 import { IflowSerializer } from '../serializer/IflowSerializer';
 import { IflowPackager } from '../packager/IflowPackager';
+import { collectExternalizedParameters } from '../utils/ExternalizedParameters';
 
 /**
  * Compile an IFlow to BPMN XML string
@@ -80,7 +81,8 @@ export async function compileToZip(flow: IFlow): Promise<Buffer> {
         outputZip = path.join(os.tmpdir(), `iflow_${Date.now()}_${flowName}.zip`);
         const packager = new IflowPackager();
         const resources = flow.getResources();
-        await packager.package(tempDir, flowName, outputZip, resources);
+        const externalizedParameters = collectExternalizedParameters(flow);
+        await packager.package(tempDir, flowName, outputZip, resources, externalizedParameters);
 
         // 4. Read ZIP into buffer
         const zipBuffer = fs.readFileSync(outputZip);
