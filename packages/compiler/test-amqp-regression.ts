@@ -170,10 +170,18 @@ async function main() {
     // ------------------------------------------------------------------
     // [3] AMQP Sender -> ContentModifier -> HTTPS Receiver
     // ------------------------------------------------------------------
-    console.log('\n[3] AMQP Sender -> ContentModifier -> HTTPS Receiver');
+    console.log('\n[3] AMQP Sender -> ContentModifier -> HTTPS Receiver (using SAP-style externalized-parameter placeholders for host/port/credentialName, since the real Event Mesh infrastructure isn\'t known at generation time)');
     const withCmJson: IFlowJson = {
         name: 'Batch Material With Transform',
-        sender: { type: 'AMQP' as any, config: { destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue' } },
+        sender: {
+            type: 'AMQP' as any,
+            config: {
+                destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue',
+                host: '{{EMHOST}}',
+                port: '{{EMPORT}}',
+                credentialName: '{{EMUser}}'
+            }
+        },
         components: [
             { id: 'transform', type: 'ContentModifier', config: { name: 'Transform', bodyType: 'constant', wrapContent: 'x' } }
         ],
@@ -185,11 +193,16 @@ async function main() {
     };
     const withCmFlow = fromJson(withCmJson);
     const withCmValidation = validate(withCmFlow);
-    assert(withCmValidation.valid, 'AMQP Sender -> ContentModifier -> HTTPS Receiver flow validates');
+    console.log('  validate():', JSON.stringify(withCmValidation));
+    assert(withCmValidation.valid, 'AMQP Sender (placeholder host/port/credentialName) -> ContentModifier -> HTTPS Receiver flow validates');
     const withCmZip = await compileToZip(withCmFlow);
     assert(withCmZip.length > 0, 'compileToZip() succeeds');
     const withCmIflw = readZipEntry(withCmZip, listZipEntries(withCmZip).find(e => e.endsWith('.iflw'))!).toString('utf-8');
     assert(withCmIflw.includes('name="Transform"'), 'ContentModifier step present after AMQP sender');
+    const withCmAmqpMf = withCmIflw.match(/<bpmn2:messageFlow[^>]*sourceRef="Participant_1"[\s\S]*?<\/bpmn2:messageFlow>/);
+    assert(!!withCmAmqpMf && /<key>host<\/key>\s*<value>\{\{EMHOST\}\}<\/value>/.test(withCmAmqpMf[0]), 'host placeholder "{{EMHOST}}" is written through as-is (SAP\'s own externalization convention)');
+    assert(!!withCmAmqpMf && /<key>port<\/key>\s*<value>\{\{EMPORT\}\}<\/value>/.test(withCmAmqpMf[0]), 'port placeholder "{{EMPORT}}" is written through as-is, bypassing the numeric range check');
+    assert(!!withCmAmqpMf && /<key>credentialName<\/key>\s*<value>\{\{EMUser\}\}<\/value>/.test(withCmAmqpMf[0]), 'credentialName placeholder "{{EMUser}}" is written through as-is');
     assertNoOrphanStartEnd(withCmIflw, 'AMQP Sender -> ContentModifier -> HTTPS Receiver');
 
     // ------------------------------------------------------------------
@@ -204,6 +217,87 @@ async function main() {
         console.log(`  Correctly threw: ${(err as Error).message}`);
     }
     assert(threwOnMissingDestination, 'fromJson() throws when destinationName is missing');
+
+    // A fully valid base config, reused below with one field removed/broken
+    // at a time -- reproduces the exact reported SAP errors ("Attribute
+    // 'Host' is mandatory", "Attribute 'Credential Name' is mandatory",
+    // "Enter a value between 1 and 65535") as compiler-side rejections
+    // instead of letting them reach compileToZip().
+    const validAmqpBase = {
+        destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue',
+        host: '{{EMHOST}}',
+        port: '{{EMPORT}}',
+        credentialName: '{{EMUser}}'
+    };
+
+    function tryAmqpConfig(config: Record<string, any>): string | undefined {
+        try {
+            fromJson({
+                name: 'x',
+                sender: { type: 'AMQP' as any, config },
+                receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
+            });
+            return undefined;
+        } catch (err) {
+            return (err as Error).message;
+        }
+    }
+
+    console.log('\n[7a] Missing Host is rejected');
+    const { host: _dropHost, ...withoutHost } = validAmqpBase;
+    const missingHostError = tryAmqpConfig(withoutHost);
+    console.log(`  Correctly threw: ${missingHostError}`);
+    assert(!!missingHostError && missingHostError.includes('Host'), 'fromJson() throws "AMQP configuration requires Host." when host is missing');
+
+    console.log('\n[7b] Missing Credential Name is rejected');
+    const { credentialName: _dropCred, ...withoutCred } = validAmqpBase;
+    const missingCredError = tryAmqpConfig(withoutCred);
+    console.log(`  Correctly threw: ${missingCredError}`);
+    assert(!!missingCredError && missingCredError.includes('Credential Name'), 'fromJson() throws "AMQP configuration requires Credential Name." when credentialName is missing');
+
+    console.log('\n[7c] Missing Port is rejected');
+    const { port: _dropPort, ...withoutPort } = validAmqpBase;
+    const missingPortError = tryAmqpConfig(withoutPort);
+    console.log(`  Correctly threw: ${missingPortError}`);
+    assert(!!missingPortError && missingPortError.toLowerCase().includes('port'), 'fromJson() throws when port is missing');
+
+    console.log('\n[7d] Port = 0 is rejected (must be between 1 and 65535)');
+    const zeroPortError = tryAmqpConfig({ ...validAmqpBase, port: 0 });
+    console.log(`  Correctly threw: ${zeroPortError}`);
+    assert(!!zeroPortError && zeroPortError.includes('between 1 and 65535'), 'fromJson() throws "AMQP Port must be between 1 and 65535." for port=0');
+
+    console.log('\n[7e] Port = 70000 is rejected (exceeds 65535)');
+    const tooHighPortError = tryAmqpConfig({ ...validAmqpBase, port: 70000 });
+    console.log(`  Correctly threw: ${tooHighPortError}`);
+    assert(!!tooHighPortError && tooHighPortError.includes('between 1 and 65535'), 'fromJson() throws "AMQP Port must be between 1 and 65535." for port=70000');
+
+    console.log('\n[7f] Port = "" (empty string) is rejected');
+    const emptyPortError = tryAmqpConfig({ ...validAmqpBase, port: '' });
+    console.log(`  Correctly threw: ${emptyPortError}`);
+    assert(!!emptyPortError, 'fromJson() throws for port=""  (never silently generates an empty port)');
+
+    console.log('\n[7g] Port = "notanumber" (non-numeric, non-placeholder string) is rejected');
+    const nonNumericPortError = tryAmqpConfig({ ...validAmqpBase, port: 'notanumber' });
+    console.log(`  Correctly threw: ${nonNumericPortError}`);
+    assert(!!nonNumericPortError && nonNumericPortError.includes('between 1 and 65535'), 'fromJson() throws for a non-numeric, non-placeholder port value');
+
+    console.log('\n[7h] Port as a literal valid number (443) is accepted');
+    const literalPortFlow = fromJson({
+        name: 'Literal Port Flow',
+        sender: { type: 'AMQP' as any, config: { ...validAmqpBase, port: 443 } },
+        receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } }
+    });
+    assert(validate(literalPortFlow).valid, 'a literal numeric port (443) in range [1, 65535] is accepted');
+
+    console.log('\n[7i] Host = "" (empty string) is rejected, not silently accepted as blank');
+    const emptyHostError = tryAmqpConfig({ ...validAmqpBase, host: '' });
+    console.log(`  Correctly threw: ${emptyHostError}`);
+    assert(!!emptyHostError && emptyHostError.includes('Host'), 'fromJson() throws for host=""');
+
+    console.log('\n[7j] Credential Name = "" (empty string) is rejected, not silently accepted as blank');
+    const emptyCredError = tryAmqpConfig({ ...validAmqpBase, credentialName: '' });
+    console.log(`  Correctly threw: ${emptyCredError}`);
+    assert(!!emptyCredError && emptyCredError.includes('Credential Name'), 'fromJson() throws for credentialName=""');
 
     // ------------------------------------------------------------------
     // [8] Unsupported / invented (RabbitMQ-style) properties rejected
@@ -276,7 +370,15 @@ async function main() {
     console.log('\n[11] No duplicate IDs when AMQP is combined with JdbcCall/ProcessCall');
     const combinedJson: IFlowJson = {
         name: 'AMQP With JdbcCall And ProcessCall',
-        sender: { type: 'AMQP' as any, config: { destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue' } },
+        sender: {
+            type: 'AMQP' as any,
+            config: {
+                destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue',
+                host: '{{EMHOST}}',
+                port: '{{EMPORT}}',
+                credentialName: '{{EMUser}}'
+            }
+        },
         components: [
             { id: 'setQuery', type: 'ContentModifier', config: { name: 'Set Query', bodyType: 'constant', wrapContent: 'SELECT 1' } },
             { id: 'lookupDb', type: 'JdbcCall', config: { name: 'Lookup DB', dataSourceAlias: 'DB1' } },

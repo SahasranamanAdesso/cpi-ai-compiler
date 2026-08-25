@@ -56,6 +56,9 @@ export interface AdapterCapability {
 
     /** Example configuration */
     example?: Record<string, any>;
+
+    /** Special requirements and validation rules */
+    notes?: string;
 }
 
 /**
@@ -297,7 +300,7 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
 /**
  * Adapter-specific configuration requirements
  */
-const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { required: string[]; optional: Record<string, string>; example?: Record<string, any> }>> = {
+const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { required: string[]; optional: Record<string, string>; example?: Record<string, any>; notes?: string }>> = {
     'HTTP': {
         'Sender': {
             required: ['address'],
@@ -565,15 +568,17 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
         // queue/topic to trigger the flow. Not RabbitMQ-style AMQP 0.9.1 --
         // no exchange/routingKey/virtualHost concept exists.
         'Sender': {
-            required: ['destinationName'],
+            // host/port/credentialName are REQUIRED: SAP's own AMQP adapter
+            // schema rejects a flow missing any of them ("Attribute 'Host'
+            // is mandatory", "Attribute 'Credential Name' is mandatory",
+            // "Enter a value between 1 and 65535" for port) -- confirmed by
+            // live SAP Integration Suite validation, not merely assumed.
+            required: ['destinationName', 'host', 'port', 'credentialName'],
             optional: {
                 'name': 'Display name',
                 'system': 'Name of the sender system shown in the collaboration diagram (defaults to name)',
-                'host': 'Event Mesh messaging gateway host (no generic default -- tenant-specific)',
-                'port': 'Event Mesh messaging gateway port (no generic default -- tenant-specific)',
                 'path': 'WebSocket path, e.g. "/protocols/amqp10ws" (no generic default -- tenant-specific)',
                 'authentication': 'Authentication method name (no generic default -- tenant-specific)',
-                'credentialName': 'Credential name configured in SAP Integration Suite (no generic default -- tenant-specific)',
                 'connectWithTLS': 'Whether to connect using TLS (default: true)',
                 'disableReplyTo': 'Whether to disable the reply-to header (default: false)',
                 'numberConcurrentProcesses': 'Number of concurrent processes consuming the destination (default: 1)',
@@ -583,8 +588,12 @@ const ADAPTER_REQUIREMENTS: Record<AdapterType, Record<AdapterDirection, { requi
                 'deliveryState': 'Delivery state on failure, e.g. "REJECTED" (no generic default -- tenant-specific)'
             },
             example: {
-                destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue'
-            }
+                destinationName: 'queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue',
+                host: '{{EMHOST}}',
+                port: '{{EMPORT}}',
+                credentialName: '{{EMUser}}'
+            },
+            notes: 'host, port, and credentialName are REQUIRED and must never be empty -- SAP rejects a missing/blank value for any of them on import ("Attribute \'Host\' is mandatory", "Attribute \'Credential Name\' is mandatory", "Enter a value between 1 and 65535" for port). port must be an integer between 1 and 65535. Use the EXACT property names host/port/credentialName -- do NOT invent alternatives such as hostname, server, credential, credentialId, or credentialAlias. If the real Event Mesh host/port/credential is not known at generation time (the common case -- this is tenant-specific infrastructure data, never invent a real-looking value), supply a SAP-style externalized-parameter placeholder string instead of a literal value, e.g. host: "{{EMHOST}}", port: "{{EMPORT}}", credentialName: "{{EMUser}}" -- this is the exact convention the reference SAP export itself uses, satisfies SAP\'s mandatory/format validation, and lets the user configure the real value after import via Configure > Externalized Parameters. A literal, valid port number (1-65535) is also accepted when known.'
         }
     } as any
 };
@@ -658,7 +667,8 @@ export function getCapabilities(): Capabilities {
                 displayName: `${adapterType} ${direction}`,
                 requiredProperties: requirements.required,
                 optionalProperties: requirements.optional,
-                example: requirements.example
+                example: requirements.example,
+                notes: requirements.notes
             });
         }
     }

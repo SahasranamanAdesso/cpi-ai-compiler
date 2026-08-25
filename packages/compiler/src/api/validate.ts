@@ -157,6 +157,51 @@ function checkAdapterOutput(adapter: any, direction: 'Sender' | 'Receiver', labe
                 message: `${label} AMQP destinationName must be a non-empty string (got: ${JSON.stringify(destinationName)})`
             });
         }
+
+        // AD-013/AD-014/AD-015: host, port, and credentialName are
+        // genuinely mandatory, non-empty, schema-validated attributes on
+        // SAP's own AMQP adapter -- confirmed by live SAP Integration Suite
+        // import errors ("Attribute 'Host' is mandatory", "Attribute
+        // 'Credential Name' is mandatory", "Enter a value between 1 and
+        // 65535"), not merely assumed. AmqpAdapter already enforces these
+        // at construction time (including the "{{Placeholder}}" exception
+        // for port -- see AmqpAdapter.ts), so these are regression guards.
+        const host = adapter.properties?.host;
+        if (typeof host !== 'string' || host.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-013',
+                message: `${label} AMQP configuration requires Host (got: ${JSON.stringify(host)}).`
+            });
+        }
+
+        const credentialName = adapter.properties?.credentialName;
+        if (typeof credentialName !== 'string' || credentialName.trim().length === 0) {
+            errors.push({
+                severity: 'error',
+                code: 'AD-014',
+                message: `${label} AMQP configuration requires Credential Name (got: ${JSON.stringify(credentialName)}).`
+            });
+        }
+
+        const port = adapter.properties?.port;
+        const isPortPlaceholder = typeof port === 'string' && /^\{\{.+\}\}$/.test(port.trim());
+        if (!isPortPlaceholder) {
+            const numericPort = Number(port);
+            if (typeof port !== 'string' && typeof port !== 'number') {
+                errors.push({
+                    severity: 'error',
+                    code: 'AD-015',
+                    message: `${label} AMQP Port must be between 1 and 65535 (got: ${JSON.stringify(port)}).`
+                });
+            } else if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+                errors.push({
+                    severity: 'error',
+                    code: 'AD-015',
+                    message: `${label} AMQP Port must be between 1 and 65535 (got: ${JSON.stringify(port)}).`
+                });
+            }
+        }
     }
 
     // AD-008: HTTP receiver address. SAP's Address field reads

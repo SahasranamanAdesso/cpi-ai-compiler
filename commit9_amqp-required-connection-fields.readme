@@ -1,0 +1,306 @@
+# Commit 9: Fix AMQP Host/Port/Credential Name validation errors
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-8 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What broke
+
+A generated AMQP flow packaged successfully via `compileToZip()`, but SAP
+Integration Suite rejected it on import with three errors at
+`AMQP [MessageFlow_4]`:
+
+> 1. Enter a value between 1 and 65535.
+> 2. Attribute 'Host' is mandatory.
+> 3. Attribute 'Credential Name' is mandatory.
+
+## 2. Root cause (item 9's A/B/C/D check)
+
+**D** -- the reference requires values for `host`/`port`/`credentialName`
+that this compiler's original AmqpAdapter (commit 8) was not generating.
+
+Ruled out the others directly:
+- **A** (AI JSON missing the properties) -- not the actual defect, even
+  though this was the trigger: the compiler's job is to reject that input,
+  not silently produce an invalid artifact from it.
+- **B** (factory not mapping supplied properties) -- false. When `host`/
+  `port`/`credentialName` ARE supplied in config, `AmqpAdapter.sender()`
+  already correctly mapped them into the output (verified by commit 8's own
+  test [2], which supplies all three and always passed).
+- **C** (factory uses different property names than the AI contract) --
+  false. The property names (`host`, `port`, `credentialName`) already
+  matched the reference evidence exactly in commit 8; no renaming was
+  needed here.
+
+The actual defect: commit 8's `AmqpAdapter.sender()` treated `host`, `port`,
+and `credentialName` as **optional**, defaulting each to `""` when omitted
+-- because their evidenced example values
+(`enterprise-messaging-messaging-gateway.cfapps.eu10.hana.ondemand.com`,
+`443`, `EventMesh_Oauth`) looked like one specific tenant's real
+infrastructure data, and the design deliberately avoided baking a fake
+"generic" value into every future flow. That reasoning about *what value*
+to default to was sound, but the conclusion -- "leave it blank if
+unconfigured" -- was wrong. **This live SAP validation is new evidence**,
+confirming `host`/`port`/`credentialName` are genuinely mandatory,
+schema-validated fields on SAP's own AMQP adapter, exactly the "SAP
+validates, compiler refines" loop this project's CLAUDE.md describes.
+
+---
+
+## 3. The fix
+
+### 3a. `host` and `credentialName` are now required inputs
+
+`AmqpAdapter.sender()` throws if either is missing or blank:
+- `"AMQP configuration requires Host."`
+- `"AMQP configuration requires Credential Name."`
+
+(exact wording matching the task's own example messages).
+
+### 3b. `port` is now required and range-validated
+
+New `resolvePort()` helper: throws if `port` is missing/blank
+(`"AMQP adapter requires port property"`), or if it's present but not an
+integer in `[1, 65535]` (`"AMQP port must be between 1 and 65535 (got:
+...)"`).
+
+### 3c. The placeholder escape hatch (item 4's "defaults/placeholders" ask)
+
+The reference ZIP itself never leaves these three fields blank -- it uses
+SAP's own **externalize-as-parameter placeholder syntax**
+(`{{EMHOST}}`, `{{EMPORT}}`, `{{EMUser}}`). This is confirmed to satisfy
+SAP's design-time mandatory/format validation: the reference flow, which
+uses exactly this syntax in exactly these fields, was successfully exported
+from a live tenant. So rather than forcing the AI to invent a fake-looking
+real hostname/credential (explicitly forbidden by the task), or leaving the
+field blank (the bug just reported), a caller who doesn't know the real
+infrastructure value may supply a `"{{PlaceholderName}}"`-shaped string
+instead of a literal one:
+
+- `host`/`credentialName`: any non-empty string is accepted, including a
+  `{{...}}` placeholder (the mandatory-non-empty check only cares that
+  *something* is there, matching SAP's own field-level rule).
+- `port`: a `{{...}}`-shaped string bypasses the numeric range check
+  entirely -- mirroring SAP's own behavior of skipping format validation
+  for a field marked for external configuration. A literal integer in
+  `[1, 65535]` is validated normally when supplied.
+
+This means a generated flow is **always structurally valid** (no field is
+ever silently blank), while still being genuinely deployable/configurable
+per-environment afterward via SAP's own Configure > Externalized Parameters
+workflow -- exactly matching the reference's own approach, and exactly
+satisfying "do NOT hard-code a real company hostname or credential" /
+"the generated iFlow should be deployable/configurable by the user".
+
+---
+
+## 4. AI capability/schema changes
+
+`ADAPTER_REQUIREMENTS['AMQP'].Sender.required` now includes `host`, `port`,
+`credentialName` (previously only `destinationName`). The `example` was
+updated to demonstrate the placeholder convention
+(`host: "{{EMHOST}}"`, `port: "{{EMPORT}}"`, `credentialName: "{{EMUser}}"`).
+
+A new `notes` field was added to the AMQP Sender capability entry,
+explaining explicitly: these three are required and must never be empty;
+the exact property names to use (warning against inventing `hostname`,
+`server`, `credential`, `credentialId`, `credentialAlias`); the placeholder
+convention and when to use it; and that a literal valid port number is also
+accepted. Since `AdapterCapability`/`ADAPTER_REQUIREMENTS` previously had no
+`notes` field at all (only `ComponentCapability` did), this required a
+small, additive extension to the existing capabilities architecture (the
+interface, the `Record<...>` type, and the one loop that builds the
+`adapters` array) -- not a new mechanism, the same pattern components
+already used.
+
+---
+
+## 5. Files changed (this package only)
+
+**Modified**:
+- `src/model/AmqpAdapter.ts` -- `host`/`credentialName` required,
+  `resolvePort()` with placeholder support, updated class-doc evidence
+  section documenting the live SAP validation finding.
+- `src/api/capabilities.ts` -- `AdapterCapability`/`ADAPTER_REQUIREMENTS`
+  gained an optional `notes` field (mirroring the existing component
+  pattern); AMQP Sender's `required`/`example`/`notes` updated.
+- `src/api/validate.ts` -- new AD-013 (Host), AD-014 (Credential Name),
+  AD-015 (Port range, with the same placeholder exception) regression
+  guards, alongside the existing AD-012 (destinationName).
+- `test-amqp-regression.ts` -- fixed two pre-existing scenarios ([3] and
+  [11]) that omitted host/port/credentialName (they were generating the
+  exact broken output just reported, undetected because nothing asserted
+  on it); added 10 new scenarios covering every missing/invalid/placeholder
+  case.
+
+**Deliberately not touched**: `destinationName`'s own validation (already
+correct, unaffected), the rest of `AmqpAdapter`'s property set (`path`,
+`authentication`, `deliveryState`, and the 6 tuning knobs all keep their
+existing optional/default behavior -- only host/port/credentialName's
+requiredness changed), the AMQP messageFlow's fixed properties
+(`proxyType`, `location_id`, etc.), every other adapter (JMS, RFC, JDBC,
+Process Direct, HTTP/HTTPS, OData, SFTP, SOAP, IDoc), the sequence-flow fix,
+the Fiori UI, and the CAP controller/`downloadFlow` handling.
+
+---
+
+## 6. Testing
+
+`test-amqp-regression.ts`, 10 new scenarios (21 total in the file, all
+passing):
+
+- [7a]/[7i] Missing/empty Host rejected with the exact message
+  `"AMQP configuration requires Host."`
+- [7b]/[7j] Missing/empty Credential Name rejected with
+  `"AMQP configuration requires Credential Name."`
+- [7c]/[7f] Missing/empty Port rejected.
+- [7d]/[7e] Port `0` and Port `70000` rejected with
+  `"AMQP port must be between 1 and 65535"`.
+- [7g] A non-numeric, non-placeholder port string (`"notanumber"`) rejected.
+- [7h] A literal valid port (`443`) accepted.
+- [3] (fixed) Now supplies `{{EMHOST}}`/`{{EMPORT}}`/`{{EMUser}}`
+  placeholders and asserts each is written through **as-is** into the
+  generated `.iflw`, confirming the placeholder convention actually reaches
+  the output.
+- [11] (fixed) Same placeholder fix applied to the combined
+  AMQP+JdbcCall+ProcessCall duplicate-ID scenario.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-jms-regression.ts` (12 scenarios),
+`test-sequence-flow-regression.ts`, `test-rfc-regression.ts` (15
+scenarios), `test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`, `test-localintegrationprocess-regression.ts`,
+`test/run-rt-003-tests.ts` (9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-amqp-regression.ts
+npx ts-node test-jms-regression.ts
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 7. AMQP JSON schema
+
+**Before (commit 8, the bug)**:
+```json
+{ "sender": { "type": "AMQP", "config": { "destinationName": "queue:..." } } }
+```
+`host`/`port`/`credentialName` silently defaulted to `""` -- structurally
+present in the XML but empty, which SAP rejects.
+
+**After (this commit, corrected)**:
+```json
+{
+  "sender": {
+    "type": "AMQP",
+    "config": {
+      "destinationName": "queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue",
+      "host": "{{EMHOST}}",
+      "port": "{{EMPORT}}",
+      "credentialName": "{{EMUser}}"
+    }
+  },
+  "receiver": { "type": "HTTPS", "config": { "url": "https://downstream.example.com", "method": "POST" } }
+}
+```
+or, when the real infrastructure values ARE known:
+```json
+{
+  "sender": {
+    "type": "AMQP",
+    "config": {
+      "destinationName": "queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue",
+      "host": "enterprise-messaging-messaging-gateway.cfapps.eu10.hana.ondemand.com",
+      "port": 443,
+      "credentialName": "EventMesh_Oauth"
+    }
+  }
+}
+```
+
+**Required**: `destinationName`, `host`, `port`, `credentialName`.
+`port` must be an integer in `[1, 65535]` or a `"{{Placeholder}}"` string.
+
+---
+
+## 8. Reference properties for Host, Port, Credential Name
+
+From `amqp_reference.zip`'s `MessageFlow_882` (unchanged from commit 8's
+evidence, now correctly enforced):
+```
+host           = {{EMHOST}}
+port           = {{EMPORT}}
+credentialName = {{EMUser}}
+```
+`parameters.propdef` confirms these under `attribute_category="EventMesh"`
+/`"EventMesh.Auth"`, types `xsd:string`/`xsd:integer`/`xsd:string`
+respectively.
+
+---
+
+## 9. Example generated AMQP XML (with placeholders)
+
+```xml
+<bpmn2:messageFlow id="MessageFlow_5" name="AMQP" sourceRef="Participant_1" targetRef="StartEvent_2">
+    <bpmn2:extensionElements>
+        <ifl:property><key>ComponentType</key><value>AMQP</value></ifl:property>
+        <ifl:property><key>destinationName</key><value>queue:sap/s4/EMD/Batch_D3_InitialLoad_Queue</value></ifl:property>
+        <ifl:property><key>host</key><value>{{EMHOST}}</value></ifl:property>
+        <ifl:property><key>port</key><value>{{EMPORT}}</value></ifl:property>
+        <ifl:property><key>credentialName</key><value>{{EMUser}}</value></ifl:property>
+        <ifl:property><key>direction</key><value>Sender</value></ifl:property>
+        <ifl:property><key>cmdVariantUri</key><value>ctype::AdapterVariant/cname::sap:AMQP/tp::WS/mp::AMQP1.0/direction::Sender/version::1.7.0</value></ifl:property>
+        ...
+    </bpmn2:extensionElements>
+</bpmn2:messageFlow>
+```
+
+---
+
+## 10. Confirmation
+
+- **Host mandatory**: `host` is now always a non-empty string (real value
+  or `{{...}}` placeholder) -- SAP's "Attribute 'Host' is mandatory" cannot
+  recur.
+- **Credential Name mandatory**: same treatment for `credentialName`.
+- **Invalid Port**: `port` is now always either a validated integer in
+  `[1, 65535]` or a `{{...}}` placeholder that SAP itself is confirmed to
+  accept in this exact field -- SAP's "Enter a value between 1 and 65535"
+  cannot recur for a compiler-generated value.
+- **`compileToZip()` succeeds**: confirmed for both the literal-value case
+  (test [2], port `443`) and the placeholder case (test [3]/[11]), with the
+  generated `.iflw` inspected directly in both.
+
+---
+
+## 11. Known limitations
+
+- Whether SAP's design-time validator truly accepts a `{{...}}` placeholder
+  for `port`'s numeric-range check specifically (vs. only for
+  string-typed `host`/`credentialName`) is inferred from the reference
+  export's own successful existence with that exact syntax in that exact
+  field -- not from a fresh round-trip import test against a live tenant in
+  this session. If a future SAP validation cycle contradicts this, the
+  `resolvePort()` placeholder exception would need to be revisited with
+  that new evidence.
+- The `path`/`authentication`/`deliveryState` fields (still optional, no
+  default) were not affected by this fix -- SAP's reported errors named
+  only Host, Port, and Credential Name as mandatory; no evidence currently
+  suggests these other fields are also mandatory.

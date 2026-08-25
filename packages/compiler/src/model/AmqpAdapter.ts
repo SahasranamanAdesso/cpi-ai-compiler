@@ -55,19 +55,42 @@ import { toXmlTechnicalName } from '../utils/XmlName';
  *   RabbitMQ (AMQP 0.9.1) concepts, not present in this SAP Event Mesh
  *   (AMQP 1.0) reference, and are therefore NOT modeled here.
  *
- *   `host`/`port`/`path`/`authentication`/`credentialName`/`deliveryState`
- *   have no generic-safe default: their evidenced values
+ *   REVISED after live SAP Integration Suite validation (the "SAP validates,
+ *   compiler refines" loop this project's CLAUDE.md describes): importing a
+ *   generated flow surfaced three real SAP-side errors --
+ *   "Attribute 'Host' is mandatory", "Attribute 'Credential Name' is
+ *   mandatory", "Enter a value between 1 and 65535" (Port) -- proving
+ *   `host`/`port`/`credentialName` are genuinely REQUIRED, non-empty,
+ *   schema-validated attributes on SAP's own AMQP adapter, not merely
+ *   optional connection details. The original design (defaulting all three
+ *   to `""` when omitted) was wrong; they are now required inputs, exactly
+ *   like `destinationName`.
+ *
+ *   `host`/`path`/`authentication`/`credentialName`/`deliveryState` still
+ *   have no generic-safe LITERAL default: their evidenced example values
  *   (e.g. "enterprise-messaging-messaging-gateway.cfapps.eu10.hana.ondemand.com",
- *   "Transport_OAuth2", "REJECTED") are clearly this one tenant's specific
- *   Event Mesh instance/credential/workflow data, not a sensible universal
- *   default -- left empty ("") when not configured, matching the evidenced
- *   empty-string convention already used for proxyPort/proxyHost/location_id
- *   in the same messageFlow. `connectWithTLS`/`disableReplyTo`/
- *   `numberConcurrentProcesses`/`maxRetries`/`queuePrefetch`/
- *   `consumeExpiredMessages` ARE generic tuning/safety knobs (not
- *   tenant-specific secrets), so their evidenced example values are used as
- *   defaults, matching how JdbcAdapter defaults connectionTimeout/
- *   queryTimeout/maxRecords.
+ *   "Transport_OAuth2") are clearly this one tenant's specific Event Mesh
+ *   instance/credential/workflow data, not a sensible universal default for
+ *   every future flow. But the reference ZIP itself never leaves these
+ *   fields blank either -- it uses SAP's own "externalize as parameter"
+ *   placeholder syntax (`{{EMHOST}}`, `{{EMPORT}}`, `{{EMUser}}`), which is
+ *   confirmed to satisfy SAP's design-time mandatory/format validation
+ *   (this reference flow was successfully exported from a live tenant with
+ *   exactly this syntax in these exact fields) while leaving the real value
+ *   to be supplied per-environment later (Configure > Externalized
+ *   Parameters). So: `host`/`port`/`credentialName` are REQUIRED inputs,
+ *   but a caller who doesn't know the real infrastructure value may
+ *   explicitly supply a `{{PlaceholderName}}`-shaped string instead of a
+ *   literal one -- for `port` specifically, that placeholder form is the
+ *   ONLY way to satisfy the numeric-range check without a real number,
+ *   mirroring how SAP itself skips format validation for externalized
+ *   fields. A silently-defaulted empty string is never produced again.
+ *
+ *   `connectWithTLS`/`disableReplyTo`/`numberConcurrentProcesses`/
+ *   `maxRetries`/`queuePrefetch`/`consumeExpiredMessages` remain optional,
+ *   generic tuning/safety knobs (not tenant-specific secrets), so their
+ *   evidenced example values are still used as defaults, matching how
+ *   JdbcAdapter defaults connectionTimeout/queryTimeout/maxRecords.
  *
  *   Boolean serialization: every boolean-shaped AMQP property in this
  *   export is externalized (a `{{...}}` parameter placeholder), so there is
@@ -108,16 +131,33 @@ export interface AmqpSenderConfig {
     destinationName: string;
     /** Name of the sender system shown in the collaboration diagram (defaults to name) */
     system?: string;
-    /** Event Mesh messaging gateway host. No generic default -- tenant-specific. */
-    host?: string;
-    /** Event Mesh messaging gateway port. No generic default -- tenant-specific. */
-    port?: number;
+    /**
+     * Event Mesh messaging gateway host (required -- SAP: "Attribute 'Host'
+     * is mandatory"). No generic literal default -- tenant-specific. If the
+     * real value isn't known at generation time, supply a SAP-style
+     * "{{PlaceholderName}}" externalized-parameter string instead of a
+     * literal host (see class doc).
+     */
+    host: string;
+    /**
+     * Event Mesh messaging gateway port (required -- SAP: "Enter a value
+     * between 1 and 65535"). Must be a number in [1, 65535], OR a
+     * "{{PlaceholderName}}" externalized-parameter string if the real value
+     * isn't known at generation time (see class doc).
+     */
+    port: number | string;
     /** WebSocket path (e.g. "/protocols/amqp10ws"). No generic default -- tenant-specific. */
     path?: string;
     /** Authentication method name (SAP UI presents this as a dropdown; no closed set evidenced). No generic default. */
     authentication?: string;
-    /** Credential name configured in SAP Integration Suite. No generic default -- tenant-specific. */
-    credentialName?: string;
+    /**
+     * Credential name configured in SAP Integration Suite (required -- SAP:
+     * "Attribute 'Credential Name' is mandatory"). No generic literal
+     * default -- tenant-specific. If the real value isn't known at
+     * generation time, supply a "{{PlaceholderName}}" externalized-parameter
+     * string instead (see class doc).
+     */
+    credentialName: string;
     /** SAP default: true */
     connectWithTLS?: boolean;
     /** SAP default: false */
@@ -134,6 +174,19 @@ export interface AmqpSenderConfig {
     deliveryState?: string;
 }
 
+/**
+ * SAP's own "externalize as parameter" placeholder syntax, e.g.
+ * "{{EMHOST}}", "{{EMPORT}}" -- confirmed by amqp_reference.zip to satisfy
+ * SAP's design-time mandatory/format validation for these exact fields
+ * (host/port/credentialName) while deferring the real value to
+ * per-environment configuration after import.
+ */
+const PLACEHOLDER_PATTERN = /^\{\{.+\}\}$/;
+
+function isPlaceholder(value: unknown): value is string {
+    return typeof value === 'string' && PLACEHOLDER_PATTERN.test(value.trim());
+}
+
 function assertSupportedKeys(config: Record<string, any>): void {
     const unsupported = Object.keys(config).filter(key => !SUPPORTED_SENDER_KEYS.includes(key));
     if (unsupported.length > 0) {
@@ -142,6 +195,27 @@ function assertSupportedKeys(config: Record<string, any>): void {
             `Supported properties: ${SUPPORTED_SENDER_KEYS.filter(k => k !== 'name').join(', ')}.`
         );
     }
+}
+
+/**
+ * Validates and normalizes the `port` config value to the exact string
+ * written into the .iflw. Accepts either a real port number in [1, 65535]
+ * or a "{{PlaceholderName}}" externalized-parameter string (see class doc
+ * for why that bypasses the numeric range check, matching SAP's own
+ * behavior for externalized fields).
+ */
+function resolvePort(port: number | string | undefined): string {
+    if (port === undefined || port === null || String(port).trim().length === 0) {
+        throw new Error('AMQP adapter requires port property');
+    }
+    if (isPlaceholder(port)) {
+        return String(port).trim();
+    }
+    const numericPort = typeof port === 'number' ? port : Number(port);
+    if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+        throw new Error(`AMQP port must be between 1 and 65535 (got: ${JSON.stringify(port)})`);
+    }
+    return numericPort.toString();
 }
 
 export class AmqpAdapter {
@@ -170,6 +244,13 @@ export class AmqpAdapter {
         if (!config.destinationName || String(config.destinationName).trim().length === 0) {
             throw new Error('AMQP adapter requires destinationName property');
         }
+        if (!config.host || String(config.host).trim().length === 0) {
+            throw new Error('AMQP configuration requires Host.');
+        }
+        if (!config.credentialName || String(config.credentialName).trim().length === 0) {
+            throw new Error('AMQP configuration requires Credential Name.');
+        }
+        const resolvedPort = resolvePort(config.port);
 
         const displayName = config.name || "AMQP";
         const channelName = toXmlTechnicalName(displayName, "AMQP");
@@ -184,7 +265,7 @@ export class AmqpAdapter {
             path: config.path ?? "",
             proxyPort: "",
             destinationName: config.destinationName,
-            host: config.host ?? "",
+            host: config.host,
             ComponentSWCVId: "1.8.0",
             direction: "Sender",
             authentication: config.authentication ?? "",
@@ -197,10 +278,10 @@ export class AmqpAdapter {
             maxRetries: (config.maxRetries ?? 1).toString(),
             system: systemName,
             queuePrefetch: (config.queuePrefetch ?? 5).toString(),
-            port: config.port !== undefined ? config.port.toString() : "",
+            port: resolvedPort,
             deliveryState: config.deliveryState ?? "",
             consumeExpiredMessages: String(config.consumeExpiredMessages ?? false),
-            credentialName: config.credentialName ?? "",
+            credentialName: config.credentialName,
             MessageProtocolVersion: "1.8.0"
         };
 
