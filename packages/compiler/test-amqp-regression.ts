@@ -443,11 +443,18 @@ async function main() {
 
     const paramProp = readZipEntry(placeholderZip, paramPropEntry!).toString('utf-8');
     console.log('  parameters.prop:\n' + paramProp.split('\n').map(l => '    ' + l).join('\n'));
-    assert(paramProp.includes('AMQP_DESTINATION='), 'parameters.prop contains an AMQP_DESTINATION= entry');
-    assert(paramProp.includes('AMQP_HOST='), 'parameters.prop contains an AMQP_HOST= entry');
-    assert(paramProp.includes('AMQP_PORT='), 'parameters.prop contains an AMQP_PORT= entry');
-    assert(paramProp.includes('AMQP_CREDENTIAL='), 'parameters.prop contains an AMQP_CREDENTIAL= entry');
-    assert(!/AMQP_HOST=\S/.test(paramProp), 'parameters.prop default value is empty, never a real/invented infrastructure value');
+    // IMPORTANT: the default value must be NON-EMPTY. A live SAP
+    // Integration Suite import proved that an externalized field resolving
+    // to an empty string still fails "Attribute is mandatory"/format
+    // validation exactly like a literal empty value would -- externalizing
+    // a field only makes its value swappable later, it does not exempt the
+    // field from needing one. So every default here must be non-blank
+    // AND never a real company's actual infrastructure/credential.
+    assert(paramProp.includes('AMQP_DESTINATION=REPLACE_WITH_QUEUE_NAME'), 'parameters.prop gives AMQP_DESTINATION a non-empty, clearly-fake default ("REPLACE_WITH_QUEUE_NAME")');
+    assert(paramProp.includes('AMQP_HOST=your-event-mesh-host.example.com'), 'parameters.prop gives AMQP_HOST a non-empty, clearly-fake default using the reserved example.com domain');
+    assert(paramProp.includes('AMQP_PORT=443'), 'parameters.prop gives AMQP_PORT the evidenced universal default (443, the standard Event Mesh AMQP1.0-over-WSS port -- not tenant-specific)');
+    assert(paramProp.includes('AMQP_CREDENTIAL=REPLACE_WITH_CREDENTIAL_NAME'), 'parameters.prop gives AMQP_CREDENTIAL a non-empty, clearly-fake default ("REPLACE_WITH_CREDENTIAL_NAME")');
+    assert(!paramProp.includes('enterprise-messaging-messaging-gateway'), 'parameters.prop never contains the real tenant hostname from the reference export');
 
     const paramPropdef = readZipEntry(placeholderZip, paramPropdefEntry!).toString('utf-8');
     console.log('  parameters.propdef:\n    ' + paramPropdef);

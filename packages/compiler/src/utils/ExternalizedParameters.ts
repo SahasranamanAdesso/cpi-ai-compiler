@@ -8,20 +8,37 @@ import { IFlow } from '../model/IFlow';
  * Suite externalized parameter, not just literal template text sitting in
  * the .iflw with nothing backing it.
  *
- * Root cause this fixes: a "{{...}}"-shaped property value written directly
- * into a messageFlow's <ifl:property> satisfies SAP's XML schema (the
- * attribute is non-empty), but SAP Integration Suite's design-time
- * validator only SKIPS the field's own mandatory/format check when that
- * property is registered as an externalized parameter via
- * parameters.propdef's <param_references> -- otherwise it is still
- * evaluated as a literal (invalid) value. This was confirmed directly:
- * amqp_reference.zip contains "{{EMHOST}}"/"{{EMPORT}}"/"{{EMUser}}" in its
- * AMQP messageFlow AND matching <parameter>/<reference> entries in
- * parameters.propdef AND matching KEY=VALUE lines in parameters.prop --
- * all three pieces together are what make the reference flow valid on
- * import. A previous fix in this compiler only reproduced the first piece
- * (writing the placeholder text) and incorrectly assumed that alone was
- * sufficient.
+ * Root cause this fixes (revised -- see "IMPORTANT CORRECTION" below): a
+ * "{{...}}"-shaped property value written directly into a messageFlow's
+ * <ifl:property> satisfies SAP's XML schema (the attribute is non-empty),
+ * but SAP Integration Suite's design-time validator does NOT stop there --
+ * it resolves the placeholder against parameters.prop and validates the
+ * RESOLVED value. Externalizing a field (registering it in
+ * parameters.propdef's <param_references>) never exempts it from needing a
+ * real value; it only makes that value swappable later via SAP's Configure
+ * > Externalized Parameters screen. This was confirmed directly:
+ * amqp_reference.zip's parameters.prop has REAL values for every one of its
+ * externalized parameters (EMHOST=enterprise-messaging-...,
+ * EMPORT=443, EMUser=EventMesh_Oauth, ...) -- none are blank.
+ *
+ * IMPORTANT CORRECTION: an earlier version of this fix registered each
+ * placeholder correctly (<parameter>/<reference> entries) but wrote an
+ * EMPTY default value ("KEY=") to parameters.prop, on the theory that
+ * externalization alone would make SAP skip the field's mandatory/format
+ * check. That theory was directly falsified by a live SAP Integration
+ * Suite import: with the parameter correctly registered but resolving to
+ * an empty string, SAP still reported "Attribute 'Host' is mandatory",
+ * "Enter a value between 1 and 65535", etc. -- because it validates the
+ * RESOLVED value, not just whether a <reference> exists. The fix now
+ * writes a clearly-fake, non-empty, format-valid DEFAULT value for each
+ * parameter (see AMQP_PLACEHOLDER_DEFAULTS below) -- e.g.
+ * "your-event-mesh-host.example.com" for host, "443" for port (the one
+ * universal, non-tenant-specific value already confirmed by evidence),
+ * "REPLACE_WITH_CREDENTIAL_NAME"/"REPLACE_WITH_QUEUE_NAME" for the two
+ * genuinely tenant-specific string fields -- never a real company's actual
+ * infrastructure or credential, but always non-empty and shaped correctly,
+ * satisfying SAP's validation while still being obviously a placeholder for
+ * the user to replace after import.
  *
  * SCOPE: only adapter types this compiler has real parameters.propdef
  * evidence for get parameters registered here (currently: AMQP only, from
@@ -48,6 +65,13 @@ export interface ExternalizedParameter {
     attributeCategory: string;
     /** attribute_id on the <reference> element (evidence: AMQP uses the short "/attrId::propertyName" form). */
     attributeId: string;
+    /**
+     * The value written to parameters.prop for this parameter. Always a
+     * non-empty, format-valid, clearly-fake placeholder -- never a real
+     * company's infrastructure/credential (see module doc for why an empty
+     * value does not work).
+     */
+    defaultValue: string;
 }
 
 const PLACEHOLDER_PATTERN = /^\{\{(.+)\}\}$/;
@@ -94,6 +118,46 @@ const EXTERNALIZABLE_PROPERTY_TYPES: Record<string, Record<string, 'string' | 'i
 };
 
 /**
+ * Default parameters.prop values for each AMQP property, used when that
+ * property is placeholder-shaped (see module doc's "IMPORTANT CORRECTION").
+ * Every value here is either:
+ *   (a) a real, evidenced, non-tenant-specific constant -- port 443 (the
+ *       universal Event Mesh AMQP1.0-over-WSS port, confirmed by
+ *       amqp_reference.zip's own EMPORT=443) and path "/protocols/amqp10ws"
+ *       (the fixed, protocol-defined WebSocket path, also confirmed by
+ *       evidence, not a per-tenant value); or
+ *   (b) an evidenced, valid "choose one" selection for a combobox-style
+ *       field (authentication: "Transport_OAuth2", deliveryState:
+ *       "REJECTED" -- both confirmed valid values from the reference, not
+ *       tenant secrets, just a choice of mechanism/behavior); or
+ *   (c) a clearly-fake, unmistakably-a-placeholder string for a genuinely
+ *       tenant-specific field (host, credentialName, destinationName) --
+ *       never a real company's actual infrastructure or credential, using
+ *       this codebase's own existing convention for "obviously not real"
+ *       values (the reserved "example.com" domain, already used throughout
+ *       this compiler's own capability examples and tests); or
+ *   (d) the same generic tuning-knob defaults AmqpAdapter itself already
+ *       uses for the non-placeholder case (numberConcurrentProcesses=1,
+ *       maxRetries=1, queuePrefetch=5, connectWithTLS=true,
+ *       disableReplyTo=false, consumeExpiredMessages=false).
+ */
+const AMQP_PLACEHOLDER_DEFAULTS: Record<string, string> = {
+    destinationName: 'REPLACE_WITH_QUEUE_NAME',
+    host: 'your-event-mesh-host.example.com',
+    port: '443',
+    path: '/protocols/amqp10ws',
+    authentication: 'Transport_OAuth2',
+    credentialName: 'REPLACE_WITH_CREDENTIAL_NAME',
+    connectWithTLS: 'true',
+    disableReplyTo: 'false',
+    NumberConcurrentProcesses: '1',
+    maxRetries: '1',
+    queuePrefetch: '5',
+    consumeExpiredMessages: 'false',
+    deliveryState: 'REJECTED'
+};
+
+/**
  * Evidence: AMQP's own param_references use the short "/attrId::x" form
  * (no "ctype::AdapterVariant/..." prefix), unlike RFC/JMS/ProcessDirect's
  * evidenced long form. Kept adapter-specific rather than a shared formula,
@@ -133,7 +197,8 @@ function collectForAdapter(adapter: { properties?: Record<string, any> } | undef
                 paramKey,
                 xsdType,
                 attributeCategory: category,
-                attributeId: buildAttributeId(componentType, propertyKey)
+                attributeId: buildAttributeId(componentType, propertyKey),
+                defaultValue: AMQP_PLACEHOLDER_DEFAULTS[propertyKey] ?? ''
             });
         }
     }

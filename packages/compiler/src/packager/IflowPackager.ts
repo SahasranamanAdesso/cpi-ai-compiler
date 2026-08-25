@@ -172,13 +172,19 @@ export class IflowPackager {
      * When one or more "{{...}}"-placeholder properties ARE present (see
      * ExternalizedParameters.ts), each gets a real <parameter> definition
      * plus a <reference> linking the specific adapter attribute to it, and
-     * a KEY= line in parameters.prop -- reproducing the three-piece
-     * structure amqp_reference.zip's own parameters.prop/parameters.propdef
-     * use for its externalized EMHOST/EMPORT/EMUser/etc. parameters. The
-     * default value written to parameters.prop is always an empty string,
-     * never a real infrastructure value -- SAP's own Configure >
-     * Externalized Parameters screen is where a human fills in the real
-     * value after import, exactly matching how a template flow ships.
+     * a KEY=<defaultValue> line in parameters.prop -- reproducing the
+     * three-piece structure amqp_reference.zip's own parameters.prop/
+     * parameters.propdef use for its externalized EMHOST/EMPORT/EMUser/etc.
+     * parameters. The default value is never a real company's
+     * infrastructure/credential, but it is also never left empty --
+     * confirmed by live SAP Integration Suite import that an externalized
+     * field resolving to an empty string still fails "Attribute is
+     * mandatory"/format validation exactly like a literal empty value would
+     * (externalizing a field only makes its value swappable later via
+     * SAP's Configure > Externalized Parameters screen, it does not exempt
+     * the field from needing one). See ExternalizedParameters.ts's
+     * AMQP_PLACEHOLDER_DEFAULTS for the exact clearly-fake value used per
+     * property.
      */
     private createParameters(flowDir: string, externalizedParameters: ExternalizedParameter[] = []): void {
         const resourcesDir = path.join(flowDir, 'src', 'main', 'resources');
@@ -197,7 +203,7 @@ export class IflowPackager {
 
         // parameters.prop - Traditional Java properties format with timestamp
         const paramPropLines = [`#${new Date().toUTCString()}`];
-        uniqueParams.forEach(p => paramPropLines.push(`${p.paramKey}=`));
+        uniqueParams.forEach(p => paramPropLines.push(`${p.paramKey}=${p.defaultValue}`));
         fs.writeFileSync(path.join(resourcesDir, 'parameters.prop'), paramPropLines.join('\r\n') + '\r\n', 'utf-8');
 
         // parameters.propdef - XML structure as per SAP format

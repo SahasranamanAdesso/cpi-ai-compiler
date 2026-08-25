@@ -1,0 +1,165 @@
+# Commit 11: Give AMQP placeholders non-empty, format-valid defaults
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-10 -- written for both future Claude sessions
+and human contributors, explaining the evidence and reasoning behind each
+decision.
+
+---
+
+## 1. What broke (again) -- and why this is a genuinely new finding
+
+Commit 10 fixed a generated AMQP flow to register `{{...}}` placeholders as
+real `parameters.propdef`/`param_references` entries, on the theory that
+this registration alone would make SAP Integration Suite exempt those
+fields from mandatory/format validation. That theory was itself **directly
+falsified** by a second live SAP import: the user uploaded a fresh
+generated ZIP (`flow (29).zip`) that had the *exact correct* registration
+structure from commit 10 -- `<parameter>` definitions, `<reference>`
+entries, everything -- and SAP **still** reported all four fields as
+invalid (now including `destinationName`/"Queue Name" too, which was also
+placeholder'd this time):
+
+> Enter a value between 1 and 65535.
+> Attribute 'Queue Name' is mandatory
+> Enter a valid address, for example http(s)://example  *(HTTP receiver -- separate, pre-existing, out of scope; see §6)*
+> Attribute 'Host' is mandatory
+> Attribute 'Credential Name' is mandatory
+
+## 2. The real root cause
+
+Externalizing a field (registering it in `parameters.propdef`) does **not**
+exempt it from SAP's mandatory/format validation. SAP resolves
+`{{PARAM_NAME}}` against `parameters.prop` and validates the **resolved**
+value -- externalization only makes that value *swappable later* via
+Configure > Externalized Parameters, it never means "this can be blank for
+now." Commit 10's fix wrote an **empty** default (`AMQP_HOST=`) for every
+placeholder, so SAP resolved `{{AMQP_HOST}}` to `""` and correctly flagged
+it as missing -- the same error as before, just routed through a
+structurally-correct-but-still-empty parameter instead of a bare literal.
+
+This is confirmed directly by re-examining `amqp_reference.zip`'s own
+`parameters.prop`: every one of its 38 parameters, including
+`EMHOST`/`EMPORT`/`EMUser`, has a **real, non-empty value** already filled
+in. The reference flow was never "blank and still valid" -- it was already
+fully configured before being exported. There is no SAP mechanism for
+shipping a mandatory field with genuinely no value, externalized or not.
+
+---
+
+## 3. The fix
+
+`ExternalizedParameter` gained a `defaultValue` field. `IflowPackager`
+now writes `KEY=<defaultValue>` instead of `KEY=` to `parameters.prop`.
+Per the task's explicit constraint ("do not hardcode a real company
+hostname or credential"), every default is one of:
+
+| Property | Default | Why |
+|---|---|---|
+| `port` | `443` | The one universal, non-tenant-specific value already confirmed by evidence (`amqp_reference.zip`'s own `EMPORT=443` -- the standard Event Mesh AMQP1.0-over-WSS port for every tenant, not this one customer's private data). |
+| `path` | `/protocols/amqp10ws` | Also evidenced as the fixed, protocol-defined WebSocket path -- not tenant-specific. |
+| `authentication` | `Transport_OAuth2` | An evidenced *valid selection* for this combobox-style field (a choice of auth mechanism, not a secret). |
+| `deliveryState` | `REJECTED` | Same reasoning -- an evidenced valid selection, not tenant data. |
+| `host` | `your-event-mesh-host.example.com` | Genuinely tenant-specific -- uses this codebase's own existing convention (the reserved `example.com` domain, already used throughout this compiler's capability examples and tests) for "obviously not real." |
+| `credentialName` | `REPLACE_WITH_CREDENTIAL_NAME` | Genuinely tenant-specific -- an unmistakable placeholder string, not a real credential name. |
+| `destinationName` | `REPLACE_WITH_QUEUE_NAME` | Genuinely tenant-specific -- same reasoning. |
+| `connectWithTLS`/`disableReplyTo`/`consumeExpiredMessages`/`numberConcurrentProcesses`/`maxRetries`/`queuePrefetch` | Same values `AmqpAdapter` already defaults to for the non-placeholder case (`true`/`false`/`false`/`1`/`1`/`5`) | Consistency -- these were never tenant secrets in the first place. |
+
+**This design decision was confirmed with the user before implementing**,
+given two consecutive incorrect assumptions about SAP's validation
+behavior on this exact feature -- see the conversation's `AskUserQuestion`
+exchange. The chosen option ("obvious dummy placeholder text") was
+selected over "drop `{{...}}` support entirely" and "user specifies exact
+values."
+
+`AmqpAdapter.ts` itself is **completely unchanged** -- it already correctly
+writes `{{...}}` into the `.iflw` and requires host/port/credentialName to
+be present (empty-string rejection, port range checking). This fix lives
+entirely in `ExternalizedParameters.ts`'s default-value table and
+`IflowPackager`'s one-line change to use it.
+
+---
+
+## 4. Files changed (this package only)
+
+**Modified**:
+- `src/utils/ExternalizedParameters.ts` -- `ExternalizedParameter.defaultValue`
+  field; `AMQP_PLACEHOLDER_DEFAULTS` table; module doc rewritten with an
+  explicit "IMPORTANT CORRECTION" section documenting why the previous
+  approach was wrong (kept in place rather than silently deleted, so a
+  future reader understands why an empty default was tried and rejected).
+- `src/packager/IflowPackager.ts` -- one-line change:
+  `${p.paramKey}=` → `${p.paramKey}=${p.defaultValue}`; doc comment updated.
+- `src/api/capabilities.ts` -- AMQP Sender's `notes` field updated to
+  describe the default-value behavior accurately.
+- `test-amqp-regression.ts` -- scenario [12]'s assertion that the default
+  was empty (now provably wrong) replaced with assertions on the exact new
+  default values, plus a check that the real reference tenant's hostname
+  never appears in generated output.
+
+**Deliberately not touched**: `AmqpAdapter.ts`, `validate.ts`'s AD-012
+through AD-015 checks, every other adapter/component type, the
+sequence-flow fix, the Fiori UI, and the CAP controller/`downloadFlow`
+handling.
+
+---
+
+## 5. Testing
+
+Updated `test-amqp-regression.ts` scenario [12] now asserts the exact
+resolved values (`AMQP_DESTINATION=REPLACE_WITH_QUEUE_NAME`,
+`AMQP_HOST=your-event-mesh-host.example.com`, `AMQP_PORT=443`,
+`AMQP_CREDENTIAL=REPLACE_WITH_CREDENTIAL_NAME`) and explicitly confirms the
+real reference tenant's hostname
+(`enterprise-messaging-messaging-gateway...`) never leaks into generated
+output. Scenario [13] (literal, non-placeholder AMQP values → unchanged
+byte-for-byte baseline) is unaffected and still passes, confirming this
+fix only changes behavior for the placeholder path.
+
+Additionally, directly regenerated the exact reported prompt's scenario
+("Create an iFlow that receives messages from an AMQP queue and sends them
+to an HTTP endpoint," using `{{AMQP_DESTINATION}}`/`{{AMQP_HOST}}`/
+`{{AMQP_PORT}}`/`{{AMQP_CREDENTIAL}}` exactly as `flow (29).zip` did) and
+confirmed the new `parameters.prop` output directly.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: all 23 AMQP scenarios, `test-jms-regression.ts` (12),
+`test-sequence-flow-regression.ts`, `test-rfc-regression.ts` (15),
+`test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+---
+
+## 6. Known limitations (unchanged from commit 10, plus one new item)
+
+- **Still not re-verified against a live SAP Integration Suite import in
+  this session.** Given this exact feature has now had two consecutive
+  assumptions falsified by the user's own live tenant, this is the
+  strongest possible caveat: **please re-import a freshly generated AMQP
+  flow and confirm the three AMQP errors are actually gone before treating
+  this as resolved.** If they persist even with a non-empty, correctly
+  registered value, that would mean a third, different mechanism is at
+  play (e.g. the `attribute_category`/`attribute_id` values not matching
+  what SAP expects in a way the reference happens to share coincidentally,
+  or something about the property's position/order in the `.iflw`) and
+  would need fresh evidence to diagnose, not another guess.
+- **The HTTP receiver's "Enter a valid address" error from the same
+  screenshot is a separate, pre-existing, out-of-scope issue** -- it means
+  the AI-generated JSON's HTTP receiver `config.url` was left empty or
+  unset. This compiler's `validate()` already has an evidenced check for
+  this (`AD-008`), but it is a **warning**, not an error, matching
+  documented SAP behavior that an unconfigured HTTP receiver address is an
+  acceptable "configure later" template-flow state (see commit 1's
+  `commit1_jdbc-support-and-naming-fixes.readme`, §2d). If SAP's live
+  behavior for THIS case also turns out to be stricter than that existing
+  evidence suggests, that would be a separate investigation, explicitly
+  not addressed here per "do not change unrelated adapters."
+- The other AMQP placeholder defaults (`path`, `authentication`,
+  `deliveryState`, and the six tuning-knob properties) were not part of the
+  reported error and are unverified against a live import in this session
+  either -- only `destinationName`/`host`/`port`/`credentialName` were
+  directly confirmed broken and are now directly re-tested.
