@@ -14,6 +14,23 @@ export interface MappingSchemaRef {
 }
 
 /**
+ * One explicit direct field-to-field mapping, relative to the mapping's
+ * source/target root elements (see `MappingSchemaRef.rootElement`) -- e.g.
+ * `{ sourcePath: "Name", targetPath: "FullName" }` or, for a nested
+ * structure, `{ sourcePath: "Address/City", targetPath: "Address/City" }`.
+ *
+ * Both paths are required together and only meaningful when the mapping
+ * resource also has `sourceSchema`/`targetSchema` set (the full brick path
+ * SAP needs is built as `/${rootElement}/${path}`).
+ */
+export interface MappingFieldRule {
+    /** Source field path relative to the source root element, e.g. "Name" or "Address/City". */
+    sourcePath: string;
+    /** Target field path relative to the target root element, e.g. "Name" or "Address/City". */
+    targetPath: string;
+}
+
+/**
  * MappingResource - Represents a Message Mapping (.mmap) artifact
  *
  * Message Mapping files define transformations between source and target message structures.
@@ -47,6 +64,20 @@ export interface MappingSchemaRef {
  * expected workflow for a template flow (see MESSAGE_MAPPING_NOTES.md),
  * not a validation error.
  *
+ * IMPORTANT (root cause of a second reported bug -- CustomerSyncFlow with
+ * red/unmapped target fields): linking the schemas above only tells SAP
+ * what the source/target STRUCTURES are -- it does not map any fields.
+ * Without at least one `<brick>` per field inside `<transformation>`, SAP
+ * shows every target field as unmapped (red) even though the structures
+ * open correctly. `fieldMappings` (an explicit, caller-supplied list of
+ * `{ sourcePath, targetPath }` pairs -- see `MappingFieldRule`) is used to
+ * emit one real direct-mapping `<brick>` per pair, in addition to the
+ * existing root-level structural brick. Field names are never inferred or
+ * guessed by matching source/target structures against each other -- a
+ * wrong auto-match would be a fake mapping that merely looks valid, which
+ * is exactly what this class must not produce.
+ *
+
  * Example usage:
  * ```typescript
  * // Minimal content + real schema references -- the compiler generates a
@@ -84,6 +115,7 @@ export class MappingResource implements Resource {
     public readonly filePath?: string;
     public readonly sourceSchema?: MappingSchemaRef;
     public readonly targetSchema?: MappingSchemaRef;
+    public readonly fieldMappings?: MappingFieldRule[];
 
     /**
      * Creates a new Message Mapping resource
@@ -99,6 +131,14 @@ export class MappingResource implements Resource {
      *        as its own `XsdResource` -- this is validated by
      *        `ComponentFactory.fromJson()`.
      * @param targetSchema - Same as sourceSchema, for the target structure.
+     * @param fieldMappings - Optional explicit list of direct source-field ->
+     *        target-field mappings (see `MappingFieldRule`), used only when
+     *        `content` is minimal/placeholder. Requires both `sourceSchema`
+     *        and `targetSchema` to be set (their root element names anchor
+     *        the full field paths SAP needs). Without this, an
+     *        auto-generated mapping links the source/target STRUCTURES but
+     *        maps no individual fields, so SAP shows every target field as
+     *        unmapped (red).
      *
      * Note: Provide either content OR filePath, not both.
      * If both are provided, content takes precedence.
@@ -128,7 +168,8 @@ export class MappingResource implements Resource {
         content?: string,
         filePath?: string,
         sourceSchema?: MappingSchemaRef,
-        targetSchema?: MappingSchemaRef
+        targetSchema?: MappingSchemaRef,
+        fieldMappings?: MappingFieldRule[]
     ) {
         if (!name.endsWith('.mmap')) {
             throw new Error(`Message mapping name must end with .mmap: ${name}`);
@@ -138,11 +179,19 @@ export class MappingResource implements Resource {
             throw new Error(`MappingResource must have either content or filePath: ${name}`);
         }
 
+        if (fieldMappings && fieldMappings.length > 0 && (!sourceSchema || !targetSchema)) {
+            throw new Error(
+                `Mapping resource "${name}": fieldMappings requires both sourceSchema and targetSchema to be set ` +
+                `(field paths are anchored at "/<rootElement>", which is only known once the real schema is linked).`
+            );
+        }
+
         this.name = name;
         this.content = content;
         this.filePath = filePath;
         this.sourceSchema = sourceSchema;
         this.targetSchema = targetSchema;
+        this.fieldMappings = fieldMappings && fieldMappings.length > 0 ? fieldMappings : undefined;
     }
 
     /**
@@ -208,6 +257,13 @@ export class MappingResource implements Resource {
      * exist in the package -- SAP shows an unlinked mapping the user
      * configures graphically after import (the documented workflow for a
      * template flow), instead of a validation error for a missing file.
+     *
+     * If `fieldMappings` were supplied, one additional direct-mapping
+     * `<brick>` is emitted per pair -- evidence format: `reference/sap-exports`
+     * real mapping `MM_Mat_3PL_to_S4HANA.mmap`, e.g.
+     * `<brick path=".../ENTRY_QNT" type="Dst"><arg><brick path=".../Sales_QTY" type="Src"/></arg><group/></brick>`
+     * -- so SAP recognizes those target fields as actually mapped instead of
+     * showing them unmapped (red).
      */
     private generateProperSapFormat(): string {
         const baseName = this.getBaseName();
@@ -220,9 +276,15 @@ export class MappingResource implements Resource {
         const sourcePath = this.sourceSchema ? `/${this.sourceSchema.rootElement}` : '/Source';
         const targetPath = this.targetSchema ? `/${this.targetSchema.rootElement}` : '/Target';
 
+        const fieldBricks = (this.fieldMappings || []).map(rule => {
+            const srcFieldPath = `${sourcePath}/${rule.sourcePath}`.replace(/\/+/g, '/');
+            const tgtFieldPath = `${targetPath}/${rule.targetPath}`.replace(/\/+/g, '/');
+            return `<brick gid="0" path="${this.escapeXml(tgtFieldPath)}" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="${this.escapeXml(srcFieldPath)}" type="Src"><viewData x="50" y="40"/></brick></arg><group/></brick>`;
+        }).join('');
+
         // Generate proper SAP XI Transformation format
         // This is the minimal valid format that SAP Integration Suite accepts
-        return `<xiObj xmlns="urn:sap-com:xi"><idInfo xmlns="" VID="01"><vc caption="LOCAL" sp="-1" swcGuid="00000000000000000000000000000000" vcType="S"><clCxt consider="A"/></vc><key typeID="XI_TRAFO" version=""/><version>1.0</version></idInfo><documentation xmlns=""><description>Auto-generated message mapping for ${baseName}</description></documentation><generic xmlns=""><admInf><modifBy>SDK</modifBy><modifAt></modifAt><modifAtLong>${timestamp}</modifAtLong><owner/></admInf><lnks>${lnks}</lnks><textInfo loadedL="EN"><textObj id="auto${timestamp}" masterL="EN" type="0"><texts lang="EN"><text label=""/></texts></textObj></textInfo></generic><AdditionalProperties xmlns=""><Property Applicable="BOTH"><PropertyName>externalNameSpace</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>choiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>groupsOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>topLevelChoiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property></AdditionalProperties><content xmlns=""><tr:XiTrafo xmlns:tr="urn:sap-com:xi:mapping:xitrafo"><tr:MetaData><mappingtool version="XI7.1"><project version="XI7.1"><libstorage><entry name="usernamespace"><functionstorage version="XI7.1"><key><key typeID=""><elem/><elem/></key></key><classname/><package/><imports/><globals><javaText/></globals><init><functionmodel><signature cacheType="0"/><name/><key/><tab/><title/><uiTitle/><implementation type="udf"><javaText/></implementation></functionmodel></init><cleanup><javaText/></cleanup><usedjars/></functionstorage></entry></libstorage><transformation><brick gid="0" path="${targetPath}" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="${sourcePath}" type="Src"><viewData x="50" y="40"/></brick></arg><group/></brick></transformation><testData><instances/></testData><ViewState></ViewState><pcont/></project></mappingtool></tr:MetaData><tr:ByteCodeJar/><tr:SourceStructure/><tr:TargetStructure/><tr:Multiplicity>1:1</tr:Multiplicity><tr:SourceParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:SourceParameters><tr:TargetParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:TargetParameters></tr:XiTrafo></content></xiObj>`;
+        return `<xiObj xmlns="urn:sap-com:xi"><idInfo xmlns="" VID="01"><vc caption="LOCAL" sp="-1" swcGuid="00000000000000000000000000000000" vcType="S"><clCxt consider="A"/></vc><key typeID="XI_TRAFO" version=""/><version>1.0</version></idInfo><documentation xmlns=""><description>Auto-generated message mapping for ${baseName}</description></documentation><generic xmlns=""><admInf><modifBy>SDK</modifBy><modifAt></modifAt><modifAtLong>${timestamp}</modifAtLong><owner/></admInf><lnks>${lnks}</lnks><textInfo loadedL="EN"><textObj id="auto${timestamp}" masterL="EN" type="0"><texts lang="EN"><text label=""/></texts></textObj></textInfo></generic><AdditionalProperties xmlns=""><Property Applicable="BOTH"><PropertyName>externalNameSpace</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>choiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>groupsOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>topLevelChoiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property></AdditionalProperties><content xmlns=""><tr:XiTrafo xmlns:tr="urn:sap-com:xi:mapping:xitrafo"><tr:MetaData><mappingtool version="XI7.1"><project version="XI7.1"><libstorage><entry name="usernamespace"><functionstorage version="XI7.1"><key><key typeID=""><elem/><elem/></key></key><classname/><package/><imports/><globals><javaText/></globals><init><functionmodel><signature cacheType="0"/><name/><key/><tab/><title/><uiTitle/><implementation type="udf"><javaText/></implementation></functionmodel></init><cleanup><javaText/></cleanup><usedjars/></functionstorage></entry></libstorage><transformation><brick gid="0" path="${targetPath}" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="${sourcePath}" type="Src"><viewData x="50" y="40"/></brick></arg><group/></brick>${fieldBricks}</transformation><testData><instances/></testData><ViewState></ViewState><pcont/></project></mappingtool></tr:MetaData><tr:ByteCodeJar/><tr:SourceStructure/><tr:TargetStructure/><tr:Multiplicity>1:1</tr:Multiplicity><tr:SourceParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:SourceParameters><tr:TargetParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:TargetParameters></tr:XiTrafo></content></xiObj>`;
     }
 
     private escapeXml(text: string): string {

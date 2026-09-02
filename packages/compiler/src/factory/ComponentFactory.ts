@@ -43,7 +43,7 @@ import { ProcessCall } from '../model/ProcessCall';
 import { LocalIntegrationProcess } from '../model/LocalIntegrationProcess';
 import { ExceptionSubprocess } from '../model/ExceptionSubprocess';
 import { GroovyResource } from '../model/GroovyResource';
-import { MappingResource, MappingSchemaRef } from '../model/MappingResource';
+import { MappingResource, MappingSchemaRef, MappingFieldRule } from '../model/MappingResource';
 import { XsdResource } from '../model/XsdResource';
 import { XsltResource } from '../model/XsltResource';
 import { ComponentRegistry } from '../registry/ComponentRegistry';
@@ -249,6 +249,20 @@ export interface ResourceConfig {
     /** type: 'mapping' only. Same as sourceXsd/sourceRootElement, for the target structure. */
     targetXsd?: string;
     targetRootElement?: string;
+    /**
+     * type: 'mapping' only. Explicit list of direct source-field ->
+     * target-field mappings, e.g. `[{ sourcePath: "Name", targetPath: "Name" }]`,
+     * or for a nested structure `{ sourcePath: "Address/City", targetPath: "Address/City" }`.
+     * Requires sourceXsd/sourceRootElement AND targetXsd/targetRootElement to
+     * also be set. Each path segment must actually be declared as an
+     * `<xs:element name="...">` somewhere in the corresponding xsd resource's
+     * content -- a field that doesn't exist in the real schema is rejected,
+     * not silently accepted (a Message Mapping must never claim to map a
+     * field that isn't actually there). Without this, an auto-generated
+     * mapping links the source/target structures but maps no individual
+     * fields, so SAP shows every target field as unmapped (red).
+     */
+    fieldMappings?: Array<{ sourcePath: string; targetPath: string }>;
 }
 
 /**
@@ -426,6 +440,95 @@ function resolveMappingSchemaRef(
     }
 
     return { xsd, rootElement };
+}
+
+/**
+ * Checks whether an XSD schema's raw content declares an element named
+ * `elementName` (i.e. contains `<xs:element name="elementName">` under any
+ * namespace prefix, or none). This is a lightweight text check, not a full
+ * XSD parse -- it confirms the name exists somewhere in the schema, not
+ * that it sits at the exact nested position a multi-segment path implies.
+ * That's an intentional, documented limitation (see
+ * commit13_message-mapping-field-mappings.readme): it is still real
+ * evidence against the actual schema, catching the concrete reported
+ * failure mode (a field that doesn't exist in the XSD at all), without
+ * this compiler needing to carry a full XML Schema parser.
+ */
+function xsdDeclaresElement(xsdContent: string, elementName: string): boolean {
+    const escaped = elementName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?element\\b[^>]*\\bname\\s*=\\s*["']${escaped}["']`, 'i');
+    return pattern.test(xsdContent);
+}
+
+/**
+ * Builds and validates the `MappingFieldRule[]` for a mapping resource
+ * definition's `fieldMappings` (if any).
+ *
+ * Root cause this guards against (reported live: a generated CustomerSyncFlow
+ * whose Message Mapping opened in SAP with the correct Source/Target
+ * structures, but every target field shown unmapped/red): linking schemas
+ * alone tells SAP what the structures ARE, but produces zero field-level
+ * `<brick>` mapping expressions. This function turns the caller's explicit
+ * `{ sourcePath, targetPath }` pairs into validated `MappingFieldRule`s so
+ * `MappingResource` can emit a real direct-mapping brick per pair -- never
+ * inferring/guessing a field correspondence by name-matching (a wrong
+ * auto-match would itself be a fake mapping).
+ *
+ * @throws if fieldMappings is given without both a source and target schema
+ *         reference, or if a path segment doesn't correspond to any element
+ *         actually declared in that side's XSD content.
+ */
+function resolveMappingFieldRules(
+    resDef: ResourceConfig,
+    sourceSchema: MappingSchemaRef | undefined,
+    targetSchema: MappingSchemaRef | undefined,
+    xsdContentByName: Map<string, string>
+): MappingFieldRule[] | undefined {
+    const rules = resDef.fieldMappings;
+    if (!rules || rules.length === 0) {
+        return undefined;
+    }
+
+    if (!sourceSchema || !targetSchema) {
+        throw new Error(
+            `Mapping resource "${resDef.name}" declares fieldMappings, but is missing sourceXsd/sourceRootElement ` +
+            `and/or targetXsd/targetRootElement. Field mapping paths are resolved against the real schema root, so ` +
+            `both the source and target schema references must be set first.`
+        );
+    }
+
+    const sourceXsdContent = xsdContentByName.get(sourceSchema.xsd) ?? '';
+    const targetXsdContent = xsdContentByName.get(targetSchema.xsd) ?? '';
+
+    return rules.map((rule, index) => {
+        if (!rule.sourcePath || !rule.targetPath) {
+            throw new Error(
+                `Mapping resource "${resDef.name}" fieldMappings[${index}] must have both "sourcePath" and "targetPath" ` +
+                `(got sourcePath=${JSON.stringify(rule.sourcePath)}, targetPath=${JSON.stringify(rule.targetPath)}).`
+            );
+        }
+
+        for (const segment of rule.sourcePath.split('/').filter(Boolean)) {
+            if (!xsdDeclaresElement(sourceXsdContent, segment)) {
+                throw new Error(
+                    `Mapping resource "${resDef.name}" fieldMappings[${index}].sourcePath="${rule.sourcePath}" references ` +
+                    `field "${segment}", but no <xs:element name="${segment}"> is declared in "${sourceSchema.xsd}". ` +
+                    `A Message Mapping must only map fields that actually exist in the packaged source schema.`
+                );
+            }
+        }
+        for (const segment of rule.targetPath.split('/').filter(Boolean)) {
+            if (!xsdDeclaresElement(targetXsdContent, segment)) {
+                throw new Error(
+                    `Mapping resource "${resDef.name}" fieldMappings[${index}].targetPath="${rule.targetPath}" references ` +
+                    `field "${segment}", but no <xs:element name="${segment}"> is declared in "${targetSchema.xsd}". ` +
+                    `A Message Mapping must only map fields that actually exist in the packaged target schema.`
+                );
+            }
+        }
+
+        return { sourcePath: rule.sourcePath, targetPath: rule.targetPath };
+    });
 }
 
 /**
@@ -1180,6 +1283,12 @@ export function fromJson(json: IFlowJson): IFlow {
         const declaredXsdNames = new Set(
             json.resources.filter(r => r.type === 'xsd').map(r => r.name)
         );
+        // Content of every xsd-type resource, keyed by name -- used to
+        // validate that a mapping's fieldMappings only reference fields that
+        // actually exist in the real schema (see resolveMappingFieldRules).
+        const xsdContentByName = new Map(
+            json.resources.filter(r => r.type === 'xsd').map(r => [r.name, r.content] as const)
+        );
 
         for (const resDef of json.resources) {
             let resource;
@@ -1191,7 +1300,8 @@ export function fromJson(json: IFlowJson): IFlow {
                 case 'mapping': {
                     const sourceSchema = resolveMappingSchemaRef('sourceXsd', 'sourceRootElement', resDef, declaredXsdNames);
                     const targetSchema = resolveMappingSchemaRef('targetXsd', 'targetRootElement', resDef, declaredXsdNames);
-                    resource = new MappingResource(resDef.name, resDef.content, undefined, sourceSchema, targetSchema);
+                    const fieldMappings = resolveMappingFieldRules(resDef, sourceSchema, targetSchema, xsdContentByName);
+                    resource = new MappingResource(resDef.name, resDef.content, undefined, sourceSchema, targetSchema, fieldMappings);
                     break;
                 }
                 case 'xsd':

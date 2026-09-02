@@ -1,0 +1,230 @@
+# Commit 13: Generate real field-to-field mapping expressions in Message Mappings
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Builds on**: commit 12 (`fix(compiler): stop inventing fake XSD references
+in auto-generated Message Mappings`), which fixed the `.mmap`'s schema
+LINKS. This commit fixes the missing field-level mapping EXPRESSIONS.
+
+---
+
+## 1. What broke (reported live)
+
+Example prompt: *"When a customer is created or updated in the source
+system, validate the customer information, enrich it with additional
+details, transform it into the format required by the target system, and
+send the updated customer record to the target system."*
+
+Generated flow: `Customer(Name, Email)` -> Message Mapping ->
+`Customer(Name, Email)` (identical structure). After commit 12, the
+Message Mapping editor opened successfully with correct Source/Target
+structures. But the target fields `Name` and `Email` showed in **RED**
+with no mapping expressions -- the mapping component/resource existed, but
+nothing was actually mapped.
+
+## 2. Root cause
+
+`MappingResource.generateProperSapFormat()` (see commit 12) links the
+source/target SCHEMAS by emitting exactly one `<brick>` in
+`<transformation>`, connecting the target ROOT element to the source ROOT
+element (e.g. `/Target` <- `/Source`). That establishes the structural
+correspondence SAP needs to open the editor, but it is not a field mapping
+-- it never touches child elements like `Name`/`Email`. SAP has no way to
+know those fields correspond, so it renders them unmapped.
+
+Evidence for what a REAL field mapping brick looks like, from the supplied
+reference export (`Send Inbound Daily Sales from Russia 3PL to S4HANA and
+DataSphere (1).zip` -> `src/main/resources/mapping/MM_Mat_3PL_to_S4HANA.mmap`):
+```xml
+<brick gid="0" path="/MBGMCR04/IDOC/E1MBGMCR/E1BP2017_GM_ITEM_CREATE/ENTRY_QNT" type="Dst">
+  <viewData x="200" y="40"/>
+  <arg>
+    <brick gid="0" path="/Records/Record/Sales_QTY" type="Src"><viewData x="50" y="40"/></brick>
+  </arg>
+  <group/>
+</brick>
+```
+A direct field-to-field mapping is one `<brick type="Dst">` per TARGET leaf
+path, whose `<arg>` is a `<brick type="Src">` for the corresponding SOURCE
+leaf path -- structurally identical to the existing root-level brick, just
+at a deeper path. (The same reference file also has function-wrapped
+bricks -- `fname="TransformDate"`, `fname="getProperty"`, etc. -- for
+computed values; those are out of scope here, see Known Limitations.)
+
+---
+
+## 3. The fix
+
+### `MappingResource.ts`
+
+- New `MappingFieldRule` interface: `{ sourcePath: string; targetPath: string }`,
+  each a path relative to that side's root element (e.g. `"Name"`, or
+  nested `"Address/City"`).
+- Constructor gained an optional `fieldMappings?: MappingFieldRule[]`
+  parameter. Throws immediately if `fieldMappings` is non-empty but either
+  `sourceSchema` or `targetSchema` is missing -- a field path is only
+  meaningful once the real root element name is known.
+- `generateProperSapFormat()` now emits one additional direct-mapping
+  `<brick>` per `fieldMappings` entry (in the same shape as the reference
+  evidence above), alongside the existing root-level structural brick.
+  With no `fieldMappings`, behavior is byte-for-byte identical to commit 12
+  (no new bricks) -- fully backward compatible.
+- Field names are **never inferred** by comparing source/target structures
+  for look-alike names. Every mapping in the output corresponds to an
+  entry the caller explicitly listed -- an auto-guessed match that happened
+  to be wrong would itself be a fake mapping.
+
+### `ComponentFactory.ts`
+
+- `ResourceConfig` gained `fieldMappings?: Array<{ sourcePath, targetPath }>`
+  (meaningful only for `type: 'mapping'` entries).
+- New `xsdDeclaresElement(xsdContent, elementName)` helper: a lightweight
+  text check (not a full XSD parse) confirming an `<xs:element name="...">`
+  with that name exists somewhere in the given schema content.
+- New `resolveMappingFieldRules()`, called when building a `mapping`
+  resource in `fromJson()`:
+  - No `fieldMappings` given -> `undefined` (falls back to schema-linking
+    only, exactly as before this commit).
+  - `fieldMappings` given without both `sourceSchema`/`targetSchema` ->
+    **throws** with a clear explanation.
+  - Any rule missing `sourcePath` or `targetPath` -> **throws**.
+  - Any path segment (on either side) that isn't declared as a real
+    `<xs:element>` in that side's actual XSD content -> **throws**, naming
+    the missing field and which XSD it should be in. A Message Mapping can
+    no longer claim to map a field that doesn't exist in the real schema.
+
+### `capabilities.ts`
+
+- `MessageMapping`'s `notes` extended to document `fieldMappings`: exact
+  shape, that it requires the schema links from commit 12, that each
+  segment must be a real element in the XSD, and that it is never
+  auto-inferred.
+
+---
+
+## 4. Files changed (this package only)
+
+**Modified**:
+- `src/model/MappingResource.ts` -- `MappingFieldRule`, constructor param +
+  validation, `generateProperSapFormat()` emits per-field bricks.
+- `src/factory/ComponentFactory.ts` -- `ResourceConfig.fieldMappings`,
+  `xsdDeclaresElement()`, `resolveMappingFieldRules()`, wired into the
+  `'mapping'` resource case in `fromJson()`.
+- `src/api/capabilities.ts` -- `MessageMapping` component `notes` extended.
+- `src/index.ts` -- exports the new `MappingFieldRule` type.
+- `test-messagemapping-regression.ts` -- 6 new scenarios ([7]-[11], plus
+  updated header comments); all 5 pre-existing scenarios re-verified
+  unchanged.
+
+**Deliberately not touched**: `MessageMapping.ts` (the flow-step
+`callActivity` component -- confirmed it only sets BPMN properties like
+`mappingname`/`mappingpath`/`mappinguri` and never touches `.mmap`
+content, so it needed no change), everything already listed as untouched
+in commit 12 (BPMN mapper/writer layers, XSD/XmlValidator, every adapter,
+sequence-flow fix, Fiori UI, CAP controller).
+
+---
+
+## 5. Testing
+
+`test-messagemapping-regression.ts`, scenarios [7]-[11] (in addition to
+the 5 pre-existing ones, all still passing):
+
+7. Direct field mappings `Customer/Name -> Target/FullName` and
+   `Customer/Email -> Target/ContactEmail` produce real
+   `<brick path="/Target/FullName" type="Dst"><arg><brick path="/Customer/Name" type="Src">...`
+   expressions in the generated `.mmap` (checked against the literal
+   generated XML, not just "does it compile").
+8. Nested field mapping: `Order/ShipTo/City -> Invoice/Delivery/City`
+   produces a correctly-pathed nested brick.
+9. `fieldMappings` referencing a field name that doesn't exist in the XSD
+   (`DoesNotExistField`) is rejected with a clear error.
+10. `fieldMappings` given without `sourceXsd`/`targetXsd` schema references
+    is rejected.
+11. A full, real `.mmap` with function-based bindings
+    (`fname="TransformDate"`, etc. -- exactly the pattern from the
+    reference export) continues to pass through **completely unchanged**;
+    `fieldMappings` has zero effect on real, already-complete mapping
+    content.
+
+Also manually reproduced the exact reported bug shape end-to-end
+(`Customer(Name, Email) -> Customer(Name, Email)`, identical structure,
+with `fieldMappings` for both fields) and inspected the raw generated
+`<transformation>` section directly:
+```xml
+<transformation>
+  <brick gid="0" path="/Customer" type="Dst"><arg><brick gid="0" path="/Customer" type="Src"/></arg><group/></brick>
+  <brick gid="0" path="/Customer/Name" type="Dst"><arg><brick gid="0" path="/Customer/Name" type="Src"/></arg><group/></brick>
+  <brick gid="0" path="/Customer/Email" type="Dst"><arg><brick gid="0" path="/Customer/Email" type="Src"/></arg><group/></brick>
+</transformation>
+```
+Both target fields now have a real, direct mapping expression instead of
+being left unmapped.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-amqp-regression.ts`, `test-jms-regression.ts`,
+`test-sequence-flow-regression.ts`, `test-rfc-regression.ts`,
+`test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`,
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3). `npx tsc --noEmit`
+and `npm run build` both clean throughout.
+
+---
+
+## 6. Example corrected JSON
+
+```json
+{
+  "resources": [
+    { "type": "xsd", "name": "Customer.xsd", "content": "..." },
+    { "type": "xsd", "name": "Target.xsd", "content": "..." },
+    {
+      "type": "mapping",
+      "name": "Customer_to_Target.mmap",
+      "content": "<mapping></mapping>",
+      "sourceXsd": "Customer.xsd",
+      "sourceRootElement": "Customer",
+      "targetXsd": "Target.xsd",
+      "targetRootElement": "Target",
+      "fieldMappings": [
+        { "sourcePath": "Name", "targetPath": "Name" },
+        { "sourcePath": "Email", "targetPath": "Email" }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 7. Known limitations
+
+- Only **direct** field-to-field mappings are generated (target field =
+  source field, verbatim). Function-based mappings (date formatting,
+  constants, `getProperty`, concatenation, etc. -- all present in the
+  reference export) are NOT auto-generated by this fix; they were never in
+  scope for the reported defect (which was about missing mappings for a
+  structurally identical Customer/Customer case). Real `.mmap` content
+  that already contains such functions continues to pass through
+  completely unchanged (scenario 11), so nothing already working is
+  broken.
+- `xsdDeclaresElement()` is a text-level check, not a full XSD parse: it
+  confirms the element name exists somewhere in the schema, not that a
+  multi-segment path (e.g. `"Address/City"`) sits at that exact nested
+  position. This is an intentional, documented trade-off (this compiler
+  carries no XML Schema parser) that still catches the concrete failure
+  mode of mapping a field that doesn't exist in the schema at all.
+- `fieldMappings` is caller-supplied and explicit by design -- this
+  compiler does not attempt to auto-detect "identical structure" and map
+  fields by matching names, since a wrong automatic match (e.g. two
+  same-named fields that aren't actually semantically equivalent) would
+  itself be a fake mapping. The AI/system generating the flow JSON from a
+  natural-language prompt is responsible for stating each field
+  correspondence explicitly.
+- Not re-verified against a live SAP Integration Suite import in this
+  session (no tenant access) -- verified structurally against the
+  generated `.mmap`'s raw XML instead, matching this project's established
+  standard, and directly against the real reference export's own brick
+  format for a direct mapping.

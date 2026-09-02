@@ -57,7 +57,7 @@ export { Splitter } from './model/Splitter';
 export { Gather } from './model/Gather';
 export { MessageMapping } from './model/MessageMapping';
 export { MappingResource } from './model/MappingResource';
-export type { MappingSchemaRef } from './model/MappingResource';
+export type { MappingSchemaRef, MappingFieldRule } from './model/MappingResource';
 export { XsdResource } from './model/XsdResource';
 export { XmlValidator } from './model/XmlValidator';
 export { XsltMapping } from './model/XsltMapping';

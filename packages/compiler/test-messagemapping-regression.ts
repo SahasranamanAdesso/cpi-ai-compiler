@@ -35,6 +35,34 @@
  *   5. Full/real .mmap content (mimicking a real SAP-exported mapping)
  *      passes through completely unchanged, regardless of schema info.
  *   6. No duplicated resource path segments (xsd/xsd/, mapping/mapping/).
+ *
+ * ---------------------------------------------------------------------
+ * Second reported bug (same CustomerSyncFlow-shaped scenario): the fix
+ * above links the Source/Target STRUCTURES correctly, but SAP Integration
+ * Suite still showed every target field (Name, Email) in RED with no
+ * mapping expressions -- because linking schemas produces zero field-level
+ * <brick> elements. Root cause: MappingResource.generateProperSapFormat()
+ * emitted only a single root-to-root structural brick, never one per field.
+ *
+ * Fix: an explicit `fieldMappings` list (source path -> target path pairs,
+ * relative to the schema root, e.g. "Name" or nested "Address/City") on
+ * the mapping resource, validated against the real declared xsd content
+ * (each path segment must be an actual `<xs:element name="...">` in that
+ * side's schema) and turned into a real direct-mapping `<brick>` per pair.
+ * Never inferred by auto-matching field names -- only emitted when the
+ * caller explicitly states each mapping.
+ *
+ * Covers:
+ *   7. Direct field mapping: Customer/Name -> Target/Name and
+ *      Customer/Email -> Target/Email produce real <brick> mapping
+ *      expressions in the .mmap (not just linked structures).
+ *   8. Nested field mapping (Address/City style paths).
+ *   9. fieldMappings referencing a field that doesn't exist in the XSD is
+ *      rejected.
+ *  10. fieldMappings without sourceSchema/targetSchema is rejected.
+ *  11. Existing mapping functions (real, full .mmap content) continue to
+ *      pass through completely unchanged -- fieldMappings has zero effect
+ *      on real content.
  */
 
 import { fromJson, validate, compileToZip, IFlowJson } from './src/index';
@@ -237,6 +265,197 @@ async function main() {
     const realMmapZip = await compileToZip(realMmapFlow);
     const packagedRealMmap = readZipEntry(realMmapZip, listZipEntries(realMmapZip).find(e => e.endsWith('Real.mmap'))!).toString('utf-8');
     assert(packagedRealMmap === realMmapContent, 'real, full .mmap content (500+ chars, has xiObj/lnks/transformation) is packaged completely unchanged, not re-generated');
+
+    // ------------------------------------------------------------------
+    // [7] Direct field-to-field mappings produce real <brick> expressions
+    // ------------------------------------------------------------------
+    console.log('\n[7] Direct field mappings (Name -> Name, Email -> Email) produce real mapping bricks');
+    const fieldMappingFlow: IFlowJson = {
+        name: 'CustomerFieldMappingFlow',
+        sender: { type: 'HTTPS', config: { address: '/customer/sync2' } },
+        components: [
+            { id: 'transformCustomer2', type: 'MessageMapping', config: { name: 'Transform Customer', mappingName: 'Customer_to_Target2.mmap' } }
+        ],
+        connections: [
+            { from: 'sender', to: 'transformCustomer2' },
+            { from: 'transformCustomer2', to: 'receiver' }
+        ],
+        receiver: { type: 'HTTP', config: { url: 'https://downstream.example.com/customer', method: 'POST' } },
+        resources: [
+            { type: 'xsd', name: 'Customer.xsd', content: CUSTOMER_XSD },
+            { type: 'xsd', name: 'Target.xsd', content: TARGET_XSD },
+            {
+                type: 'mapping',
+                name: 'Customer_to_Target2.mmap',
+                content: '<mapping></mapping>',
+                sourceXsd: 'Customer.xsd',
+                sourceRootElement: 'Customer',
+                targetXsd: 'Target.xsd',
+                targetRootElement: 'Target',
+                fieldMappings: [
+                    { sourcePath: 'Name', targetPath: 'FullName' },
+                    { sourcePath: 'Email', targetPath: 'ContactEmail' }
+                ]
+            } as any
+        ]
+    };
+    const fieldMappingFlowModel = fromJson(fieldMappingFlow);
+    assert(validate(fieldMappingFlowModel).valid, 'flow with fieldMappings validates with zero errors');
+    const fieldMappingZip = await compileToZip(fieldMappingFlowModel);
+    const fieldMappingEntries = listZipEntries(fieldMappingZip);
+    const fieldMappingMmap = readZipEntry(fieldMappingZip, fieldMappingEntries.find(e => e.endsWith('Customer_to_Target2.mmap'))!).toString('utf-8');
+
+    assert(
+        fieldMappingMmap.includes('<brick gid="0" path="/Target/FullName" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="/Customer/Name" type="Src">'),
+        '.mmap contains a real brick mapping /Customer/Name -> /Target/FullName'
+    );
+    assert(
+        fieldMappingMmap.includes('<brick gid="0" path="/Target/ContactEmail" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="/Customer/Email" type="Src">'),
+        '.mmap contains a real brick mapping /Customer/Email -> /Target/ContactEmail'
+    );
+
+    // ------------------------------------------------------------------
+    // [8] Nested field mapping
+    // ------------------------------------------------------------------
+    console.log('\n[8] Nested field mapping (Address/City style path)');
+    const NESTED_SOURCE_XSD = `<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Order">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="ShipTo">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="City" type="xs:string"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+    const NESTED_TARGET_XSD = `<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Invoice">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Delivery">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="City" type="xs:string"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>`;
+    const nestedFlow: IFlowJson = {
+        name: 'NestedFieldMappingFlow',
+        sender: { type: 'HTTPS', config: { address: '/order' } },
+        components: [
+            { id: 'transformOrder', type: 'MessageMapping', config: { name: 'Transform Order', mappingName: 'Order_to_Invoice.mmap' } }
+        ],
+        connections: [
+            { from: 'sender', to: 'transformOrder' },
+            { from: 'transformOrder', to: 'receiver' }
+        ],
+        receiver: { type: 'HTTP', config: { url: 'https://downstream.example.com/invoice', method: 'POST' } },
+        resources: [
+            { type: 'xsd', name: 'Order.xsd', content: NESTED_SOURCE_XSD },
+            { type: 'xsd', name: 'Invoice.xsd', content: NESTED_TARGET_XSD },
+            {
+                type: 'mapping',
+                name: 'Order_to_Invoice.mmap',
+                content: '<mapping></mapping>',
+                sourceXsd: 'Order.xsd',
+                sourceRootElement: 'Order',
+                targetXsd: 'Invoice.xsd',
+                targetRootElement: 'Invoice',
+                fieldMappings: [
+                    { sourcePath: 'ShipTo/City', targetPath: 'Delivery/City' }
+                ]
+            } as any
+        ]
+    };
+    const nestedFlowModel = fromJson(nestedFlow);
+    assert(validate(nestedFlowModel).valid, 'nested field mapping flow validates with zero errors');
+    const nestedZip = await compileToZip(nestedFlowModel);
+    const nestedEntries = listZipEntries(nestedZip);
+    const nestedMmap = readZipEntry(nestedZip, nestedEntries.find(e => e.endsWith('Order_to_Invoice.mmap'))!).toString('utf-8');
+    assert(
+        nestedMmap.includes('<brick gid="0" path="/Invoice/Delivery/City" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="/Order/ShipTo/City" type="Src">'),
+        '.mmap contains a real nested brick mapping /Order/ShipTo/City -> /Invoice/Delivery/City'
+    );
+
+    // ------------------------------------------------------------------
+    // [9] fieldMappings referencing a non-existent field is rejected
+    // ------------------------------------------------------------------
+    console.log('\n[9] fieldMappings referencing a field not declared in the XSD is rejected');
+    let threwOnUnknownField = false;
+    try {
+        fromJson({
+            name: 'x',
+            sender: { type: 'HTTPS', config: { address: '/x' } },
+            components: [{ id: 'm', type: 'MessageMapping', config: { name: 'Map', mappingName: 'M2.mmap' } }],
+            connections: [{ from: 'sender', to: 'm' }, { from: 'm', to: 'receiver' }],
+            receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } },
+            resources: [
+                { type: 'xsd', name: 'Customer.xsd', content: CUSTOMER_XSD },
+                { type: 'xsd', name: 'Target.xsd', content: TARGET_XSD },
+                {
+                    type: 'mapping', name: 'M2.mmap', content: '<mapping></mapping>',
+                    sourceXsd: 'Customer.xsd', sourceRootElement: 'Customer',
+                    targetXsd: 'Target.xsd', targetRootElement: 'Target',
+                    fieldMappings: [{ sourcePath: 'DoesNotExistField', targetPath: 'FullName' }]
+                } as any
+            ]
+        });
+    } catch (err) {
+        threwOnUnknownField = true;
+        console.log(`  Correctly threw: ${(err as Error).message}`);
+    }
+    assert(threwOnUnknownField, 'fromJson() throws when a fieldMappings path segment does not exist in the XSD');
+
+    // ------------------------------------------------------------------
+    // [10] fieldMappings without a schema reference is rejected
+    // ------------------------------------------------------------------
+    console.log('\n[10] fieldMappings without sourceSchema/targetSchema is rejected');
+    let threwOnMissingSchemaForFieldMappings = false;
+    try {
+        fromJson({
+            name: 'x',
+            sender: { type: 'HTTPS', config: { address: '/x' } },
+            components: [{ id: 'm', type: 'MessageMapping', config: { name: 'Map', mappingName: 'M3.mmap' } }],
+            connections: [{ from: 'sender', to: 'm' }, { from: 'm', to: 'receiver' }],
+            receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } },
+            resources: [
+                { type: 'mapping', name: 'M3.mmap', content: '<mapping></mapping>', fieldMappings: [{ sourcePath: 'Name', targetPath: 'Name' }] } as any
+            ]
+        });
+    } catch (err) {
+        threwOnMissingSchemaForFieldMappings = true;
+        console.log(`  Correctly threw: ${(err as Error).message}`);
+    }
+    assert(threwOnMissingSchemaForFieldMappings, 'fromJson() throws when fieldMappings is given without sourceXsd/targetXsd schema references');
+
+    // ------------------------------------------------------------------
+    // [11] Existing mapping functions in real content still work
+    // ------------------------------------------------------------------
+    console.log('\n[11] Real .mmap content with function-based mappings (fname/fns bindings) still passes through unchanged');
+    const functionMmapContent = `<xiObj xmlns="urn:sap-com:xi">${'x'.repeat(500)}<lnks/><content><tr:XiTrafo xmlns:tr="urn:sap-com:xi:mapping:xitrafo"><transformation><brick gid="0" path="/Target/Date" type="Dst"><arg><brick fname="TransformDate" fns="dflt" type="Func"><arg><brick gid="0" path="/Source/Date" type="Src"/></arg><bindings><param name="iform"><value>yyyy-MM-dd</value></param><param name="oform"><value>yyyyMMdd</value></param></bindings></brick></arg><group/></brick></transformation></tr:XiTrafo></content></xiObj>`;
+    const functionMmapFlow = fromJson({
+        name: 'Function Mmap Flow',
+        sender: { type: 'HTTPS', config: { address: '/x' } },
+        components: [{ id: 'm4', type: 'MessageMapping', config: { name: 'Map', mappingName: 'Function.mmap' } }],
+        connections: [{ from: 'sender', to: 'm4' }, { from: 'm4', to: 'receiver' }],
+        receiver: { type: 'HTTPS', config: { url: 'https://example.com', method: 'POST' } },
+        resources: [{ type: 'mapping', name: 'Function.mmap', content: functionMmapContent }]
+    });
+    const functionMmapZip = await compileToZip(functionMmapFlow);
+    const packagedFunctionMmap = readZipEntry(functionMmapZip, listZipEntries(functionMmapZip).find(e => e.endsWith('Function.mmap'))!).toString('utf-8');
+    assert(packagedFunctionMmap === functionMmapContent, 'real .mmap content with function-based bindings (fname="TransformDate", etc.) is packaged completely unchanged');
+    assert(packagedFunctionMmap.includes('fname="TransformDate"'), 'existing mapping function reference is preserved verbatim');
 
     console.log(`\n=== ${failures === 0 ? 'ALL PASSED' : failures + ' FAILURE(S)'} ===`);
     process.exit(failures === 0 ? 0 : 1);
