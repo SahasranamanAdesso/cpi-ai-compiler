@@ -1,0 +1,234 @@
+# Commit 12: Fix Message Mapping auto-generation referencing unpackaged XSDs
+
+**Branch**: `Work-on-Parameters-and-Remaining-Components`
+**Scope**: `packages/compiler` (the `@cpi-ai/compiler` package)
+**Audience**: same as commits 1-11 -- written for both future Claude
+sessions and human contributors, explaining the evidence and reasoning
+behind each decision.
+
+---
+
+## 1. What broke (confirmed by inspecting the uploaded ZIP)
+
+A generated flow (`CustomerSyncFlow.zip`) packaged a real `Customer.xsd`
+resource, but its Message Mapping's `.mmap` file linked
+`SourceSchema.xsd`/`TargetSchema.xsd` -- filenames that were never
+packaged anywhere in the ZIP -- and used the generic root element names
+`Source`/`Target` instead of the real schema's `Customer` element. SAP
+Integration Suite opened "Transform Customer → Message Mapping" with empty
+Source/Target structures and validation errors.
+
+## 2. Root cause
+
+`MappingResource.generateProperSapFormat()` -- the "auto-enhancement" that
+turns minimal/placeholder `.mmap` content into a full SAP XI Transformation
+structure (added earlier specifically so an AI wouldn't need to hand-author
+the complex `.mmap` XML format -- see `AUTO_ENHANCEMENT_FEATURE.md`) --
+**hardcoded** `"SourceSchema.xsd"`/`"TargetSchema.xsd"`/`"Source"`/`"Target"`
+into the generated `<lnks>` section and transformation bricks, completely
+independent of what XSD resources the flow actually declared. There was no
+mechanism anywhere in the JSON contract for a caller to say "this mapping's
+source structure comes from XSD X, root element Y" -- so the
+auto-enhancement always fabricated the same four placeholder names,
+regardless of whether a real, correctly-named XSD (like `Customer.xsd`)
+was sitting right there in the same `resources[]` array.
+
+---
+
+## 3. The fix
+
+### `MappingResource.ts`
+
+- New `MappingSchemaRef` interface: `{ xsd: string; rootElement: string }`.
+- Constructor gained optional `sourceSchema`/`targetSchema` parameters.
+- `generateProperSapFormat()` rewritten:
+  - **When both are supplied**: the `<lnks>` section links the real
+    `sourceSchema.xsd`/`targetSchema.xsd` filenames with their real
+    `rootElement` names, and the transformation's root bricks use
+    `/  <rootElement>` instead of the generic `/Source`/`/Target` --
+    exactly matching what a real SAP-authored mapping's `.mmap` looks like
+    for that schema pair.
+  - **When neither is supplied** (the pre-existing, backward-compatible
+    case -- e.g. `test-jdbc-ai-scenarios-regression.ts`'s existing
+    scenario, which never provided schema info): `<lnks>` is now **empty**
+    (`<lnks></lnks>`) instead of pointing at an invented filename. SAP
+    shows an unlinked mapping the user configures graphically after
+    import -- the documented, expected workflow for a template flow (see
+    `MESSAGE_MAPPING_NOTES.md`) -- rather than a broken reference to a
+    file that was never packaged. This preserves the existing regression
+    test's passing behavior exactly while removing the dishonest fake
+    reference.
+  - Supplying only one of the two (e.g. `sourceSchema` without
+    `targetSchema`) is handled the same way as the reference SAP export
+    itself would represent an incomplete mapping -- but see the factory
+    validation below, which actually prevents this ambiguous half-state
+    from being requested via the JSON contract in the first place.
+
+### `ComponentFactory.ts`
+
+- `ResourceConfig` gained optional `sourceXsd`/`sourceRootElement`/
+  `targetXsd`/`targetRootElement` fields (meaningful only for
+  `type: 'mapping'` entries).
+- New `resolveMappingSchemaRef()` helper, called once per side (source/
+  target) when building a `mapping` resource in `fromJson()`:
+  - If neither `xsd` nor `rootElement` is given for that side → `undefined`
+    (falls back to the safe "unlinked" case above).
+  - If only one of the pair is given → **throws** ("must be supplied
+    together") -- a half-complete schema reference is never silently
+    accepted.
+  - If both are given but the named `xsd` isn't declared as its own
+    `{ type: 'xsd', name: ... }` entry anywhere in the same `resources[]`
+    array → **throws**, with a message naming the exact missing resource
+    and what to add. This is the direct fix for the reported defect: a
+    Message Mapping can no longer reference a schema that isn't packaged.
+
+### `capabilities.ts`
+
+- `MessageMapping`'s component capability gained a `notes` field explaining
+  that the real schema linkage lives on the **resource** entry (not the
+  component), giving the exact property names (`sourceXsd`/
+  `sourceRootElement`/`targetXsd`/`targetRootElement`), and warning
+  explicitly that referencing an unpackaged schema is rejected -- directly
+  citing this bug so a future AI generation doesn't repeat it.
+
+---
+
+## 4. Files changed (this package only)
+
+**New**:
+- `test-messagemapping-regression.ts`
+
+**Modified**:
+- `src/model/MappingResource.ts` -- `MappingSchemaRef`, constructor params,
+  `generateProperSapFormat()` rewritten, new `escapeXml()` helper.
+- `src/factory/ComponentFactory.ts` -- `ResourceConfig` fields,
+  `resolveMappingSchemaRef()`, wired into the `'mapping'` resource case in
+  `fromJson()`.
+- `src/api/capabilities.ts` -- `MessageMapping` component `notes` field.
+- `src/index.ts` -- exports the new `MappingSchemaRef` type.
+
+**Deliberately not touched**: `MessageMapping.ts` (the flow-step
+`callActivity` component itself -- unaffected, since the schema linkage
+lives on the resource, not this class), the BPMN mapper/writer layers, the
+XSD/XmlValidator/resource-path-normalization logic (already correct per
+earlier fixes -- re-verified, not re-touched), every adapter (JDBC, RFC,
+JMS, AMQP, Process Direct, HTTP/HTTPS, ...), the sequence-flow fix, the
+Fiori UI, and the CAP controller/`downloadFlow` handling.
+
+---
+
+## 5. Testing
+
+`test-messagemapping-regression.ts`, 5 scenario groups, all passing,
+checked against the raw generated `.mmap`/ZIP contents:
+
+1. The corrected `CustomerSyncFlow` scenario end-to-end
+   (`fromJson`→`validate`→`compileToZip`→inspect `.mmap`) -- confirms the
+   `<lnks>` section links the real `Customer.xsd`/`Target.xsd` with their
+   real root elements, confirms `SourceSchema.xsd`/`TargetSchema.xsd`
+   never appear anywhere in the output, confirms the transformation
+   bricks use `/Customer`/`/Target`, confirms **every** XSD filename the
+   `.mmap` references is packaged in the ZIP at the exact path referenced,
+   and confirms no duplicated `xsd/xsd/`/`mapping/mapping/` resource
+   paths.
+2. A mapping referencing an XSD not declared in `resources[]` is rejected
+   with a clear, actionable error.
+3. An incomplete `sourceXsd`-without-`sourceRootElement` pair is rejected.
+4. Backward compatibility: a mapping with no schema info at all still
+   compiles successfully (no new hard requirement was introduced), and the
+   generated `.mmap` no longer contains any invented filename.
+5. Full, real `.mmap` content (500+ chars, contains `xiObj`/`lnks`/
+   `transformation`) passes through **completely unchanged**, confirming
+   the existing "don't touch real SAP-exported mappings" behavior is
+   untouched.
+
+**Full pre-existing regression suite re-run after this change -- zero
+regressions**: `test-amqp-regression.ts` (23), `test-jms-regression.ts`
+(12), `test-sequence-flow-regression.ts`, `test-rfc-regression.ts` (15),
+`test-jdbc-regression.ts`, `test-jdbc-ai-scenarios-regression.ts`
+(specifically re-verified since its own Message Mapping scenario uses the
+"no schema info" fallback path this fix changed the output of --
+confirmed it still passes, since that scenario never asserted on the
+`.mmap`'s own content, only the BPMN `callActivity`'s properties),
+`test-naming-version-regression.ts`, `test-customer-flow-regression.ts`,
+`test-processdirect-regression.ts`,
+`test-localintegrationprocess-regression.ts`, `test/run-rt-003-tests.ts`
+(9/9), `test/run-mapping-regression-simple.ts` (3/3).
+
+Run with (from `packages/compiler/`):
+```
+npm run build   # or: npx tsc --noEmit
+npx ts-node test-messagemapping-regression.ts
+npx ts-node test-amqp-regression.ts
+npx ts-node test-jms-regression.ts
+npx ts-node test-sequence-flow-regression.ts
+npx ts-node test-rfc-regression.ts
+npx ts-node test-jdbc-regression.ts
+npx ts-node test-jdbc-ai-scenarios-regression.ts
+npx ts-node test-naming-version-regression.ts
+npx ts-node test-customer-flow-regression.ts
+npx ts-node test-processdirect-regression.ts
+npx ts-node test-localintegrationprocess-regression.ts
+npx ts-node ../../test/run-rt-003-tests.ts
+npx ts-node ../../test/run-mapping-regression-simple.ts
+```
+
+---
+
+## 6. Example corrected JSON
+
+```json
+{
+  "components": [
+    { "id": "transformCustomer", "type": "MessageMapping", "config": { "name": "Transform Customer", "mappingName": "Customer_to_Target.mmap" } }
+  ],
+  "resources": [
+    { "type": "xsd", "name": "Customer.xsd", "content": "..." },
+    { "type": "xsd", "name": "Target.xsd", "content": "..." },
+    {
+      "type": "mapping",
+      "name": "Customer_to_Target.mmap",
+      "content": "<mapping></mapping>",
+      "sourceXsd": "Customer.xsd",
+      "sourceRootElement": "Customer",
+      "targetXsd": "Target.xsd",
+      "targetRootElement": "Target"
+    }
+  ]
+}
+```
+
+### Generated `.mmap` `<lnks>` section
+```xml
+<lnks>
+  <lnkRole kpos="1" role="TARGET_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>Target.xsd</elem><elem>src/main/resources/xsd</elem><elem>Target</elem></key></lnk></lnkRole>
+  <lnkRole kpos="1" role="SOURCE_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>Customer.xsd</elem><elem>src/main/resources/xsd</elem><elem>Customer</elem></key></lnk></lnkRole>
+</lnks>
+```
+
+---
+
+## 7. Known limitations
+
+- The generated `.mmap` still has **no actual field-mapping logic**
+  (`<transformation>` is a bare Source→Target link with no per-field
+  bindings) -- this was already a documented, accepted limitation before
+  this fix (`.mmap` field-level mapping logic requires SAP's graphical
+  editor; hand-generating it was never in scope -- see
+  `MESSAGE_MAPPING_NOTES.md`). This fix only corrects *which schemas* the
+  mapping links and their *root element names*, not the field-by-field
+  transformation rules inside it.
+- Not re-verified against a live SAP Integration Suite import in this
+  session (no tenant access). Structural correctness (every referenced
+  schema packaged at the exact path, correct root element names, no
+  invented filenames) was verified directly against the generated ZIP
+  instead, matching this project's established standard -- but per the
+  pattern from commits 10-11, a live import is the only fully conclusive
+  check for this class of bug.
+- `resolveMappingSchemaRef()` only checks that a same-named `xsd` resource
+  is *declared*; it does not parse the XSD to confirm the named
+  `rootElement` genuinely exists inside it (that would require an XML
+  schema parser this compiler doesn't otherwise need). A caller could still
+  supply a `rootElement` name that doesn't match the actual XSD content --
+  out of scope for this fix, which addresses the reported "references an
+  unpackaged file" defect specifically.

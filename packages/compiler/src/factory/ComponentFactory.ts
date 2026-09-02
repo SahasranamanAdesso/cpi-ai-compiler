@@ -43,7 +43,7 @@ import { ProcessCall } from '../model/ProcessCall';
 import { LocalIntegrationProcess } from '../model/LocalIntegrationProcess';
 import { ExceptionSubprocess } from '../model/ExceptionSubprocess';
 import { GroovyResource } from '../model/GroovyResource';
-import { MappingResource } from '../model/MappingResource';
+import { MappingResource, MappingSchemaRef } from '../model/MappingResource';
 import { XsdResource } from '../model/XsdResource';
 import { XsltResource } from '../model/XsltResource';
 import { ComponentRegistry } from '../registry/ComponentRegistry';
@@ -233,6 +233,22 @@ export interface ResourceConfig {
     type: 'groovy' | 'mapping' | 'xsd' | 'xslt';
     name: string;
     content: string;
+    /**
+     * type: 'mapping' only. Names the ALREADY-DECLARED xsd resource (must
+     * also appear as its own { type: 'xsd', name: ... } entry in this same
+     * resources[] array) this mapping's source structure comes from, plus
+     * that schema's root element name. Both fields are required together
+     * when supplied. Omitting both is allowed (falls back to an unlinked
+     * mapping the user configures graphically in SAP after import) --
+     * omitting only one is an error, and naming an xsd that isn't actually
+     * declared in resources[] is an error (a Message Mapping must never
+     * reference a schema that isn't packaged).
+     */
+    sourceXsd?: string;
+    sourceRootElement?: string;
+    /** type: 'mapping' only. Same as sourceXsd/sourceRootElement, for the target structure. */
+    targetXsd?: string;
+    targetRootElement?: string;
 }
 
 /**
@@ -361,6 +377,55 @@ function resolveProcessCallProcessId(
         return config;
     }
     return { ...config, processId: target.id };
+}
+
+/**
+ * Builds a `MappingSchemaRef` for one side (source/target) of a mapping
+ * resource definition from its `xsdKey`/`rootElementKey` fields (e.g.
+ * "sourceXsd"/"sourceRootElement"), or returns undefined if neither is
+ * present.
+ *
+ * Root cause this guards against (reported via a real generated ZIP,
+ * CustomerSyncFlow.zip): a Message Mapping's auto-generated .mmap
+ * previously always linked invented filenames ("SourceSchema.xsd"/
+ * "TargetSchema.xsd") that were never actually packaged, so SAP opened the
+ * mapping with empty structures and validation errors. This function
+ * enforces that a caller-supplied schema reference is both complete (xsd
+ * filename AND root element together, never just one) and actually
+ * packaged (the named xsd must appear as its own `{ type: 'xsd' }` entry
+ * in the same resources[] array) -- never silently accepting a reference
+ * to a file that isn't in the ZIP.
+ *
+ * @throws if only one of xsdKey/rootElementKey is supplied, or if the
+ *         named xsd isn't declared as its own resource in this JSON.
+ */
+function resolveMappingSchemaRef(
+    xsdKey: 'sourceXsd' | 'targetXsd',
+    rootElementKey: 'sourceRootElement' | 'targetRootElement',
+    resDef: ResourceConfig,
+    declaredXsdNames: Set<string>
+): MappingSchemaRef | undefined {
+    const xsd = resDef[xsdKey];
+    const rootElement = resDef[rootElementKey];
+
+    if (xsd === undefined && rootElement === undefined) {
+        return undefined;
+    }
+    if (xsd === undefined || rootElement === undefined) {
+        throw new Error(
+            `Mapping resource "${resDef.name}": "${xsdKey}" and "${rootElementKey}" must be supplied together ` +
+            `(got ${xsdKey}=${JSON.stringify(xsd)}, ${rootElementKey}=${JSON.stringify(rootElement)}).`
+        );
+    }
+    if (!declaredXsdNames.has(xsd)) {
+        throw new Error(
+            `Mapping resource "${resDef.name}" references ${xsdKey}="${xsd}", but no resource of type "xsd" named "${xsd}" ` +
+            `is declared in resources[]. A Message Mapping must only reference XSD schemas that are actually packaged -- ` +
+            `add { "type": "xsd", "name": "${xsd}", "content": "..." } to resources[], or remove this reference.`
+        );
+    }
+
+    return { xsd, rootElement };
 }
 
 /**
@@ -1108,6 +1173,14 @@ export function fromJson(json: IFlowJson): IFlow {
 
     // Add resources
     if (json.resources) {
+        // Names of every xsd-type resource actually declared in this JSON --
+        // used below to validate a mapping's sourceXsd/targetXsd (if given)
+        // really are packaged, per the explicit requirement that a Message
+        // Mapping must never reference a schema that isn't in the ZIP.
+        const declaredXsdNames = new Set(
+            json.resources.filter(r => r.type === 'xsd').map(r => r.name)
+        );
+
         for (const resDef of json.resources) {
             let resource;
 
@@ -1115,9 +1188,12 @@ export function fromJson(json: IFlowJson): IFlow {
                 case 'groovy':
                     resource = new GroovyResource(resDef.name, resDef.content);
                     break;
-                case 'mapping':
-                    resource = new MappingResource(resDef.name, resDef.content);
+                case 'mapping': {
+                    const sourceSchema = resolveMappingSchemaRef('sourceXsd', 'sourceRootElement', resDef, declaredXsdNames);
+                    const targetSchema = resolveMappingSchemaRef('targetXsd', 'targetRootElement', resDef, declaredXsdNames);
+                    resource = new MappingResource(resDef.name, resDef.content, undefined, sourceSchema, targetSchema);
                     break;
+                }
                 case 'xsd':
                     resource = new XsdResource(resDef.name, resDef.content);
                     break;

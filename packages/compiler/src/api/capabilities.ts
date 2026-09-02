@@ -184,7 +184,8 @@ const COMPONENT_REQUIREMENTS: Record<ComponentType, { required: string[]; option
         example: {
             name: 'Transform to Invoice',
             mappingName: 'Order_to_Invoice.mmap'
-        }
+        },
+        notes: 'The actual .mmap file content is a SEPARATE resources[] entry (type: "mapping", name matching mappingName), not part of this component\'s own config. If you don\'t have real .mmap content exported from SAP\'s graphical mapping editor, supply minimal placeholder content (e.g. "<mapping></mapping>") -- the compiler auto-generates a valid SAP XI Transformation structure. To make that generated mapping link real schemas instead of shipping unlinked (which the user would otherwise configure graphically after import), also set sourceXsd/sourceRootElement and/or targetXsd/targetRootElement on that SAME resources[] mapping entry, e.g. { "type": "mapping", "name": "Order_to_Invoice.mmap", "content": "<mapping></mapping>", "sourceXsd": "Order.xsd", "sourceRootElement": "Order", "targetXsd": "Invoice.xsd", "targetRootElement": "Invoice" }. Both xsd+rootElement must be given together, and the named xsd MUST also be declared as its own { "type": "xsd", ... } resources[] entry -- referencing a schema that isn\'t packaged is rejected, not silently accepted (this was a real reported bug: the mapping ended up linking schema filenames that were never packaged, so SAP opened it with empty structures and validation errors).'
     },
     'XmlValidator': {
         required: ['xsd'],

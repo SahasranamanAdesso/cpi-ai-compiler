@@ -1,6 +1,19 @@
 import { Resource } from "./Resource";
 
 /**
+ * Identifies one side (source or target) of a Message Mapping's structure:
+ * the packaged XSD resource it comes from, and that schema's root element
+ * name. Both fields are required together -- a schema reference is
+ * meaningless with only a filename or only a root element name.
+ */
+export interface MappingSchemaRef {
+    /** Filename of an XSD resource that MUST also be packaged separately (its own `{ type: 'xsd', name: ... }` resource entry). */
+    xsd: string;
+    /** The root element name defined inside that XSD. */
+    rootElement: string;
+}
+
+/**
  * MappingResource - Represents a Message Mapping (.mmap) artifact
  *
  * Message Mapping files define transformations between source and target message structures.
@@ -16,19 +29,38 @@ import { Resource } from "./Resource";
  * - Content can be provided inline or loaded from filesystem
  * - Packager handles ZIP bundle integration
  *
+ * IMPORTANT (root cause of a reported bug -- CustomerSyncFlow.zip):
+ * when the caller supplies minimal/placeholder .mmap content (see
+ * `isMinimalContent()`/`generateProperSapFormat()` below), this class used
+ * to auto-generate a full SAP XI Transformation structure that HARDCODED
+ * "SourceSchema.xsd"/"TargetSchema.xsd" as the linked schemas and
+ * "Source"/"Target" as the root element names -- regardless of what XSD
+ * resources the flow actually packaged. SAP then opened the Message
+ * Mapping with empty Source/Target structures and validation errors,
+ * because the .mmap pointed at files that were never packaged. Fixed by
+ * accepting an explicit `sourceSchema`/`targetSchema` (each an actual
+ * packaged XSD filename + its real root element name) and using THOSE in
+ * the generated `<lnks>` section instead of inventing names. When neither
+ * is supplied, the generated mapping now omits the schema links entirely
+ * (rather than inventing fake ones) -- SAP shows an unlinked mapping the
+ * user configures graphically after import, which is the documented,
+ * expected workflow for a template flow (see MESSAGE_MAPPING_NOTES.md),
+ * not a validation error.
+ *
  * Example usage:
  * ```typescript
- * // Minimal .mmap content (SAP will allow graphical editing)
+ * // Minimal content + real schema references -- the compiler generates a
+ * // full SAP XI Transformation that links the ACTUAL packaged XSDs.
  * const mapping = new MappingResource(
- *     "Order_to_Invoice.mmap",
- *     `<?xml version="1.0" encoding="UTF-8"?>
- * <mapping xmlns="http://www.sap.com/mapping" version="1.0">
- *     <source>OrderMessage</source>
- *     <target>InvoiceMessage</target>
- * </mapping>`
+ *     "Customer_to_Target.mmap",
+ *     '<?xml version="1.0"?><mapping></mapping>',
+ *     undefined,
+ *     { xsd: "Customer.xsd", rootElement: "Customer" },
+ *     { xsd: "Target.xsd", rootElement: "Target" }
  * );
  *
- * // From filesystem
+ * // From filesystem (a real .mmap exported from SAP's graphical editor --
+ * // passes through unchanged, schema refs not needed)
  * const mapping = new MappingResource(
  *     "Complex_Transform.mmap",
  *     undefined,
@@ -50,6 +82,8 @@ export class MappingResource implements Resource {
     public readonly name: string;
     public readonly content?: string;
     public readonly filePath?: string;
+    public readonly sourceSchema?: MappingSchemaRef;
+    public readonly targetSchema?: MappingSchemaRef;
 
     /**
      * Creates a new Message Mapping resource
@@ -57,6 +91,14 @@ export class MappingResource implements Resource {
      * @param name - Mapping filename (e.g., "Order_to_Invoice.mmap")
      * @param content - Optional inline mapping content (XML)
      * @param filePath - Optional filesystem path to load mapping from
+     * @param sourceSchema - Optional real source XSD + root element, used
+     *        only when `content` is minimal/placeholder (see
+     *        `isMinimalContent()`) -- the compiler generates a proper SAP
+     *        XI Transformation linking this ACTUAL packaged schema instead
+     *        of inventing a name. That XSD must also be added to the flow
+     *        as its own `XsdResource` -- this is validated by
+     *        `ComponentFactory.fromJson()`.
+     * @param targetSchema - Same as sourceSchema, for the target structure.
      *
      * Note: Provide either content OR filePath, not both.
      * If both are provided, content takes precedence.
@@ -84,7 +126,9 @@ export class MappingResource implements Resource {
     constructor(
         name: string,
         content?: string,
-        filePath?: string
+        filePath?: string,
+        sourceSchema?: MappingSchemaRef,
+        targetSchema?: MappingSchemaRef
     ) {
         if (!name.endsWith('.mmap')) {
             throw new Error(`Message mapping name must end with .mmap: ${name}`);
@@ -97,6 +141,8 @@ export class MappingResource implements Resource {
         this.name = name;
         this.content = content;
         this.filePath = filePath;
+        this.sourceSchema = sourceSchema;
+        this.targetSchema = targetSchema;
     }
 
     /**
@@ -153,14 +199,39 @@ export class MappingResource implements Resource {
     /**
      * Generates proper SAP XI Transformation format
      * This creates a valid .mmap that SAP can open and edit graphically
+     *
+     * If sourceSchema/targetSchema were supplied, the <lnks> section links
+     * the ACTUAL packaged XSD resources (and the transformation's root
+     * bricks use their real root element names) -- never an invented
+     * filename. If neither was supplied, the <lnks> section is left empty
+     * (no schema linked) rather than pointing at a schema that doesn't
+     * exist in the package -- SAP shows an unlinked mapping the user
+     * configures graphically after import (the documented workflow for a
+     * template flow), instead of a validation error for a missing file.
      */
     private generateProperSapFormat(): string {
         const baseName = this.getBaseName();
         const timestamp = Date.now();
 
+        const lnks = (this.sourceSchema && this.targetSchema)
+            ? `<lnkRole kpos="1" role="TARGET_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>${this.escapeXml(this.targetSchema.xsd)}</elem><elem>src/main/resources/xsd</elem><elem>${this.escapeXml(this.targetSchema.rootElement)}</elem></key></lnk></lnkRole><lnkRole kpos="1" role="SOURCE_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>${this.escapeXml(this.sourceSchema.xsd)}</elem><elem>src/main/resources/xsd</elem><elem>${this.escapeXml(this.sourceSchema.rootElement)}</elem></key></lnk></lnkRole>`
+            : '';
+
+        const sourcePath = this.sourceSchema ? `/${this.sourceSchema.rootElement}` : '/Source';
+        const targetPath = this.targetSchema ? `/${this.targetSchema.rootElement}` : '/Target';
+
         // Generate proper SAP XI Transformation format
         // This is the minimal valid format that SAP Integration Suite accepts
-        return `<xiObj xmlns="urn:sap-com:xi"><idInfo xmlns="" VID="01"><vc caption="LOCAL" sp="-1" swcGuid="00000000000000000000000000000000" vcType="S"><clCxt consider="A"/></vc><key typeID="XI_TRAFO" version=""/><version>1.0</version></idInfo><documentation xmlns=""><description>Auto-generated message mapping for ${baseName}</description></documentation><generic xmlns=""><admInf><modifBy>SDK</modifBy><modifAt></modifAt><modifAtLong>${timestamp}</modifAtLong><owner/></admInf><lnks><lnkRole kpos="1" role="TARGET_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>TargetSchema.xsd</elem><elem>src/main/resources/xsd</elem><elem>Target</elem></key></lnk></lnkRole><lnkRole kpos="1" role="SOURCE_IFR_MESS"><lnk rMode="R"><key typeID="xsd" version="1.1"><elem>SourceSchema.xsd</elem><elem>src/main/resources/xsd</elem><elem>Source</elem></key></lnk></lnkRole></lnks><textInfo loadedL="EN"><textObj id="auto${timestamp}" masterL="EN" type="0"><texts lang="EN"><text label=""/></texts></textObj></textInfo></generic><AdditionalProperties xmlns=""><Property Applicable="BOTH"><PropertyName>externalNameSpace</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>choiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>groupsOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>topLevelChoiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property></AdditionalProperties><content xmlns=""><tr:XiTrafo xmlns:tr="urn:sap-com:xi:mapping:xitrafo"><tr:MetaData><mappingtool version="XI7.1"><project version="XI7.1"><libstorage><entry name="usernamespace"><functionstorage version="XI7.1"><key><key typeID=""><elem/><elem/></key></key><classname/><package/><imports/><globals><javaText/></globals><init><functionmodel><signature cacheType="0"/><name/><key/><tab/><title/><uiTitle/><implementation type="udf"><javaText/></implementation></functionmodel></init><cleanup><javaText/></cleanup><usedjars/></functionstorage></entry></libstorage><transformation><brick gid="0" path="/Target" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="/Source" type="Src"><viewData x="50" y="40"/></brick></arg><group/></brick></transformation><testData><instances/></testData><ViewState></ViewState><pcont/></project></mappingtool></tr:MetaData><tr:ByteCodeJar/><tr:SourceStructure/><tr:TargetStructure/><tr:Multiplicity>1:1</tr:Multiplicity><tr:SourceParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:SourceParameters><tr:TargetParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:TargetParameters></tr:XiTrafo></content></xiObj>`;
+        return `<xiObj xmlns="urn:sap-com:xi"><idInfo xmlns="" VID="01"><vc caption="LOCAL" sp="-1" swcGuid="00000000000000000000000000000000" vcType="S"><clCxt consider="A"/></vc><key typeID="XI_TRAFO" version=""/><version>1.0</version></idInfo><documentation xmlns=""><description>Auto-generated message mapping for ${baseName}</description></documentation><generic xmlns=""><admInf><modifBy>SDK</modifBy><modifAt></modifAt><modifAtLong>${timestamp}</modifAtLong><owner/></admInf><lnks>${lnks}</lnks><textInfo loadedL="EN"><textObj id="auto${timestamp}" masterL="EN" type="0"><texts lang="EN"><text label=""/></texts></textObj></textInfo></generic><AdditionalProperties xmlns=""><Property Applicable="BOTH"><PropertyName>externalNameSpace</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>choiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>groupsOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property><Property Applicable="BOTH"><PropertyName>topLevelChoiceOccurrence</PropertyName><PropertyValue>RESOLVED</PropertyValue></Property></AdditionalProperties><content xmlns=""><tr:XiTrafo xmlns:tr="urn:sap-com:xi:mapping:xitrafo"><tr:MetaData><mappingtool version="XI7.1"><project version="XI7.1"><libstorage><entry name="usernamespace"><functionstorage version="XI7.1"><key><key typeID=""><elem/><elem/></key></key><classname/><package/><imports/><globals><javaText/></globals><init><functionmodel><signature cacheType="0"/><name/><key/><tab/><title/><uiTitle/><implementation type="udf"><javaText/></implementation></functionmodel></init><cleanup><javaText/></cleanup><usedjars/></functionstorage></entry></libstorage><transformation><brick gid="0" path="${targetPath}" type="Dst"><viewData x="200" y="40"/><arg><brick gid="0" path="${sourcePath}" type="Src"><viewData x="50" y="40"/></brick></arg><group/></brick></transformation><testData><instances/></testData><ViewState></ViewState><pcont/></project></mappingtool></tr:MetaData><tr:ByteCodeJar/><tr:SourceStructure/><tr:TargetStructure/><tr:Multiplicity>1:1</tr:Multiplicity><tr:SourceParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:SourceParameters><tr:TargetParameters><tr:Parameter><tr:Position>1</tr:Position><tr:Minoccurs>1</tr:Minoccurs><tr:Maxoccurs>1</tr:Maxoccurs></tr:Parameter></tr:TargetParameters></tr:XiTrafo></content></xiObj>`;
+    }
+
+    private escapeXml(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
     }
 
     /**
