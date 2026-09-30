@@ -155,8 +155,9 @@ export class HttpAdapter {
                 system: "Receiver",
                 MessageProtocolVersion: protocol === "HTTPS" ? "1.5.2" : "1.16.1",
                 componentVersion: protocol === "HTTPS" ? "1.5" : "1.16",
-                // Dynamic URL property (can be set via header)
-                ...(config.url ? { staticUrl: config.url } : {})
+                // SAP validates this property name specifically - confirmed against
+                // a working tenant export. A dynamic URL can still be set via header.
+                httpAddressWithoutQuery: config.url || ""
             }
         );
     }

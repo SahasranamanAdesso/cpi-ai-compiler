@@ -459,15 +459,15 @@ async function testUrlNormalization() {
     const plainUrl = createAdapter('HTTP', 'Receiver', {
         url: 'https://api.example.com/orders'
     });
-    console.log('✓ Plain URL:', plainUrl.properties.staticUrl);
+    console.log('✓ Plain URL:', plainUrl.properties.httpAddressWithoutQuery);
 
     // Test 6b: Markdown URL (normalized)
     const markdownUrl = createAdapter('HTTP', 'Receiver', {
         url: '[https://api.example.com/orders](https://api.example.com/orders)'
     });
-    console.log('✓ Markdown URL normalized:', markdownUrl.properties.staticUrl);
+    console.log('✓ Markdown URL normalized:', markdownUrl.properties.httpAddressWithoutQuery);
 
-    if (markdownUrl.properties.staticUrl !== 'https://api.example.com/orders') {
+    if (markdownUrl.properties.httpAddressWithoutQuery !== 'https://api.example.com/orders') {
         throw new Error('Markdown URL normalization failed!');
     }
 

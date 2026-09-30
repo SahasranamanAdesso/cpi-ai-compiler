@@ -138,3 +138,20 @@ export type {
     ConnectionConfig,
     IFlowJson
 } from './factory/ComponentFactory';
+
+// ============================================================================
+// PUBLIC API - AI / Deployment Layer
+// ============================================================================
+
+/**
+ * AI-powered generation and SAP deployment-retry orchestration
+ */
+export { AIPipeline } from './ai/AIPipeline';
+export { AIProvider } from './ai/AIProvider';
+export { GenerationResult } from './ai/GenerationResult';
+export { IntegrationFlowGenerator, IntegrationFlowResult } from './ai/IntegrationFlowGenerator';
+export { DeploymentOrchestrator, ArtifactIdentity } from './ai/DeploymentOrchestrator';
+export { Deployer, DeployZipParams, DeployPollOptions, DeployResult } from './ai/Deployer';
+export { DeploymentResult, DeploymentAttempt } from './ai/DeploymentResult';
+export { ClaudeProvider } from './ai/providers/ClaudeProvider';
+export { AdessoAIHubProvider } from './ai/providers/AdessoAIHubProvider';

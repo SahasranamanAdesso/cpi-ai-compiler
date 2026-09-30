@@ -104,3 +104,5 @@ export { IntegrationFlowGenerator, IntegrationFlowResult } from './ai/Integratio
 export { DeploymentOrchestrator, ArtifactIdentity } from './ai/DeploymentOrchestrator';
 export { Deployer, DeployZipParams, DeployPollOptions, DeployResult } from './ai/Deployer';
 export { DeploymentResult, DeploymentAttempt } from './ai/DeploymentResult';
+export { ClaudeProvider } from './ai/providers/ClaudeProvider';
+export { AdessoAIHubProvider } from './ai/providers/AdessoAIHubProvider';

@@ -204,6 +204,69 @@ async function testGenerationFailureSkipsDeploy() {
     console.log('✅ Test 5 PASSED\n');
 }
 
+/**
+ * Test 6: runAttempt runs a single attempt without looping.
+ */
+async function testRunAttemptSingleShot() {
+    console.log('🧪 Test 6: runAttempt runs exactly one attempt\n');
+
+    let deployCalls = 0;
+    const deployer: Deployer = {
+        async deployZip(): Promise<DeployResult> {
+            deployCalls++;
+            return { status: 'ERROR' };
+        },
+        async getArtifactError(): Promise<unknown | null> {
+            return { errorMessage: 'Single attempt error' };
+        }
+    };
+
+    const orchestrator = new DeploymentOrchestrator(createSucceedingGenerator(), deployer, ARTIFACT);
+    const attempt = await orchestrator.runAttempt('Create a flow', tempZipPath(), undefined, 1);
+
+    if (deployCalls !== 1) throw new Error(`Expected exactly 1 deploy call, got ${deployCalls}`);
+    if (attempt.attemptNumber !== 1) throw new Error(`Expected attemptNumber 1, got ${attempt.attemptNumber}`);
+    if (attempt.deployResult?.status !== 'ERROR') throw new Error('Expected deployResult.status ERROR');
+    if (!attempt.feedbackGiven || !attempt.feedbackGiven.includes('Single attempt error')) {
+        throw new Error(`Expected feedback to include the SAP error text, got: ${attempt.feedbackGiven}`);
+    }
+
+    console.log('✅ Test 6 PASSED\n');
+}
+
+/**
+ * Test 7: buildNextRequest composes feedback identically for generation
+ * failures and SAP deployment errors, matching deployWithRetry's own wording.
+ */
+async function testBuildNextRequest() {
+    console.log('🧪 Test 7: buildNextRequest composes feedback text\n');
+
+    const orchestrator = new DeploymentOrchestrator(createSucceedingGenerator(), {
+        async deployZip(): Promise<DeployResult> { return { status: 'STARTED' }; },
+        async getArtifactError(): Promise<unknown | null> { return null; }
+    }, ARTIFACT);
+
+    const genFailureRequest = orchestrator.buildNextRequest('Create a flow', {
+        attemptNumber: 1,
+        generationErrors: ['Generated code is empty']
+    });
+    if (!genFailureRequest.includes('PREVIOUS ATTEMPT HAD ERRORS') || !genFailureRequest.includes('Generated code is empty')) {
+        throw new Error(`Expected generation-failure feedback text, got: ${genFailureRequest}`);
+    }
+
+    const deployFailureRequest = orchestrator.buildNextRequest('Create a flow', {
+        attemptNumber: 1,
+        generationErrors: [],
+        deployResult: { status: 'ERROR' },
+        feedbackGiven: 'Groovy script compilation failed'
+    });
+    if (!deployFailureRequest.includes('SAP REPORTED A DEPLOYMENT ERROR') || !deployFailureRequest.includes('Groovy script compilation failed')) {
+        throw new Error(`Expected SAP-error feedback text, got: ${deployFailureRequest}`);
+    }
+
+    console.log('✅ Test 7 PASSED\n');
+}
+
 async function runAllTests() {
     console.log('='.repeat(60));
     console.log('  DeploymentOrchestrator Tests');
@@ -216,6 +279,8 @@ async function runAllTests() {
         await testNullErrorDetailFallback();
         await testTimeoutSkipsGetArtifactError();
         await testGenerationFailureSkipsDeploy();
+        await testRunAttemptSingleShot();
+        await testBuildNextRequest();
 
         console.log('='.repeat(60));
         console.log('  🎉 ALL TESTS PASSED');

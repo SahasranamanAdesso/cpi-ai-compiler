@@ -268,7 +268,7 @@ export class BpmnProcessMapper {
             senderMessageFlow.addProperty("maximumBodySize", "40");
             senderMessageFlow.addProperty("ComponentNS", "sap");
             senderMessageFlow.addProperty("componentVersion", "1.5");
-            senderMessageFlow.addProperty("urlPath", "/hello");
+            senderMessageFlow.addProperty("urlPath", this.buildDefaultSenderPath(flow.name));
             senderMessageFlow.addProperty("Name", "HTTPS");
             senderMessageFlow.addProperty("TransportProtocolVersion", "1.5.2");
             senderMessageFlow.addProperty("ComponentSWCVName", "external");
@@ -356,7 +356,11 @@ export class BpmnProcessMapper {
             receiverMessageFlow.addProperty("apiDisplayName", "");
             receiverMessageFlow.addProperty("MessageProtocolVersion", "1.20.1");
             receiverMessageFlow.addProperty("providerRelativeUrl", "");
-            receiverMessageFlow.addProperty("httpAddressWithoutQuery", "");
+            // SAP rejects deployment if this is empty ("Enter a valid address") -
+            // default receivers have no real target, so use a syntactically valid
+            // placeholder; callers who need a real endpoint should use
+            // flow.setReceiver(HttpAdapter.receiver({ url: ... })) instead.
+            receiverMessageFlow.addProperty("httpAddressWithoutQuery", "https://example.com");
         }
         collaboration.addMessageFlow(receiverMessageFlow);
 
@@ -366,6 +370,26 @@ export class BpmnProcessMapper {
         definitions.setDiagram(diagram);
 
         return definitions;
+    }
+
+    /**
+     * Builds a unique HTTPS sender urlPath for the default sender (used when
+     * flow.getSender() is not set). SAP Integration Suite rejects deploying
+     * two active iFlows that both expose the same address - a hardcoded
+     * literal here means every flow generated without a custom sender would
+     * collide on that same address, so we derive one from the flow name plus
+     * a random suffix.
+     *
+     * @param flowName - Name of the flow being mapped
+     * @returns A URL path unique to this flow, e.g. "/helloworld-a1b2c3d4"
+     */
+    private buildDefaultSenderPath(flowName: string): string {
+        const slug = flowName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'flow';
+        const suffix = Math.random().toString(36).slice(2, 10);
+        return `/${slug}-${suffix}`;
     }
 
     /**
