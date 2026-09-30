@@ -29,6 +29,7 @@
     "minimal": "ts-node examples/minimal-demo.ts",
     "ai-demo": "ts-node examples/ai-generation.ts",
     "e2e-demo": "ts-node examples/end-to-end.ts",
+    "deploy-retry-demo": "ts-node examples/deploy-with-retry.ts",
     "consumer": "ts-node examples/consumer-example.ts",
     "test-compiler": "ts-node test-compiler-package.ts",
     "all-components": "ts-node all-components-demo.ts",
