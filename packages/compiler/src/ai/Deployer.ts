@@ -53,3 +53,49 @@ export interface Deployer {
      */
     getArtifactError(id: string): Promise<unknown | null>;
 }
+
+const MAX_FEEDBACK_LENGTH = 4000;
+
+/**
+ * Formats a Deployer error result (a DeployResult's terminal status plus,
+ * for ERROR, the raw payload from Deployer.getArtifactError()) into
+ * natural-language feedback suitable for the next AI generation attempt.
+ *
+ * Used internally by DeploymentOrchestrator between retry attempts, and
+ * exported standalone so callers who already have SAP error detail from
+ * elsewhere (e.g. syncing the status of a flow deployed outside this
+ * pipeline) can produce the same feedback text without going through a
+ * generate+deploy cycle.
+ *
+ * This is a seam for a future MessageProcessingLogs fallback (when
+ * getArtifactError resolves null on tenants that don't populate it) - out
+ * of scope for v1.
+ */
+export function formatSapErrorFeedback(status: 'ERROR' | 'TIMEOUT', detail: unknown): string {
+    if (status === 'TIMEOUT') {
+        return 'Deployment did not reach a terminal state within the polling timeout. ' +
+            'SAP did not report a specific error in time; treat this as a possible ' +
+            'runtime/startup issue with the generated flow (e.g. missing configuration, ' +
+            'long-running initialization, or an adapter that failed to start).';
+    }
+
+    if (detail === null || detail === undefined) {
+        return 'SAP reported a deployment ERROR status but no structured error detail was ' +
+            'available from the tenant (getArtifactError returned empty). Review the flow ' +
+            'for common causes: invalid adapter configuration, missing required properties, ' +
+            'or unsupported component combinations.';
+    }
+
+    let text: string;
+    try {
+        text = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+    } catch {
+        text = String(detail);
+    }
+
+    if (text.length > MAX_FEEDBACK_LENGTH) {
+        text = text.slice(0, MAX_FEEDBACK_LENGTH) + '\n... (truncated)';
+    }
+
+    return text;
+}

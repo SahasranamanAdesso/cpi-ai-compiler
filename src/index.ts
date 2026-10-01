@@ -102,7 +102,7 @@ export { AIProvider } from './ai/AIProvider';
 export { GenerationResult } from './ai/GenerationResult';
 export { IntegrationFlowGenerator, IntegrationFlowResult } from './ai/IntegrationFlowGenerator';
 export { DeploymentOrchestrator, ArtifactIdentity } from './ai/DeploymentOrchestrator';
-export { Deployer, DeployZipParams, DeployPollOptions, DeployResult } from './ai/Deployer';
+export { Deployer, DeployZipParams, DeployPollOptions, DeployResult, formatSapErrorFeedback } from './ai/Deployer';
 export { DeploymentResult, DeploymentAttempt } from './ai/DeploymentResult';
 export { ClaudeProvider } from './ai/providers/ClaudeProvider';
 export { AdessoAIHubProvider } from './ai/providers/AdessoAIHubProvider';

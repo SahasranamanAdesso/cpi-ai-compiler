@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import { IntegrationFlowGenerator } from './IntegrationFlowGenerator';
-import { Deployer, DeployZipParams, DeployPollOptions, DeployResult } from './Deployer';
+import { Deployer, DeployZipParams, DeployPollOptions, DeployResult, formatSapErrorFeedback } from './Deployer';
 import { DeploymentResult, DeploymentAttempt } from './DeploymentResult';
 
 /**
@@ -58,8 +58,6 @@ export interface ArtifactIdentity {
  * );
  */
 export class DeploymentOrchestrator {
-    private static readonly MAX_FEEDBACK_LENGTH = 4000;
-
     constructor(
         private readonly generator: IntegrationFlowGenerator,
         private readonly deployer: Deployer,
@@ -173,7 +171,7 @@ export class DeploymentOrchestrator {
             ? await this.deployer.getArtifactError(this.artifact.id)
             : undefined;
 
-        const feedback = this.formatSapErrorFeedback(deployResult.status, sapErrorDetail ?? null);
+        const feedback = formatSapErrorFeedback(deployResult.status, sapErrorDetail ?? null);
 
         return {
             attemptNumber,
@@ -202,40 +200,5 @@ export class DeploymentOrchestrator {
         }
 
         return `${originalRequest}\n\nPREVIOUS ATTEMPT WAS DEPLOYED BUT SAP REPORTED A DEPLOYMENT ERROR:\n${lastAttempt.feedbackGiven}\nPlease regenerate the Integration Flow to fix this deployment issue.`;
-    }
-
-    /**
-     * Formats a Deployer error result into natural-language feedback for the
-     * next AI generation attempt. This is a seam for a future
-     * MessageProcessingLogs fallback (when getArtifactError resolves null on
-     * tenants that don't populate it) - out of scope for v1.
-     */
-    private formatSapErrorFeedback(status: 'ERROR' | 'TIMEOUT', detail: unknown): string {
-        if (status === 'TIMEOUT') {
-            return 'Deployment did not reach a terminal state within the polling timeout. ' +
-                'SAP did not report a specific error in time; treat this as a possible ' +
-                'runtime/startup issue with the generated flow (e.g. missing configuration, ' +
-                'long-running initialization, or an adapter that failed to start).';
-        }
-
-        if (detail === null || detail === undefined) {
-            return 'SAP reported a deployment ERROR status but no structured error detail was ' +
-                'available from the tenant (getArtifactError returned empty). Review the flow ' +
-                'for common causes: invalid adapter configuration, missing required properties, ' +
-                'or unsupported component combinations.';
-        }
-
-        let text: string;
-        try {
-            text = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
-        } catch {
-            text = String(detail);
-        }
-
-        if (text.length > DeploymentOrchestrator.MAX_FEEDBACK_LENGTH) {
-            text = text.slice(0, DeploymentOrchestrator.MAX_FEEDBACK_LENGTH) + '\n... (truncated)';
-        }
-
-        return text;
     }
 }
