@@ -142,7 +142,7 @@ export class DeploymentOrchestrator {
         pollOptions?: DeployPollOptions,
         attemptNumber: number = 1
     ): Promise<DeploymentAttempt> {
-        const genResult = await this.generator.generate(request, outputPath);
+        const genResult = await this.generator.generate(request, outputPath, this.artifact.id);
 
         if (!genResult.success) {
             return {

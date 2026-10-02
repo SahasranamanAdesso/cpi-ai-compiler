@@ -40,16 +40,24 @@ export class IflowPackager {
      * @param flowName - Name of the flow (e.g., "HelloWorld")
      * @param outputZip - Output ZIP path (e.g., /tmp/HelloWorld.zip)
      * @param resources - Optional array of resources to package (scripts, mappings, schemas)
+     * @param symbolicName - Overrides the Bundle-SymbolicName (defaults to a
+     *   slugified flowName). SAP CPI refuses to update an existing designtime
+     *   artifact if the ZIP's symbolic name differs from the one currently
+     *   deployed under that artifact ID - callers that redeploy to a fixed
+     *   artifact ID across multiple attempts (e.g. a Fix & Redeploy loop,
+     *   where the AI may pick a different flow name each time) must pass
+     *   that stable artifact ID here to avoid a 400 on update.
      */
     async package(
         flowDir: string,
         flowName: string,
         outputZip: string,
-        resources?: Resource[]
+        resources?: Resource[],
+        symbolicName?: string
     ): Promise<void> {
 
         // Create MANIFEST.MF
-        this.createManifest(flowDir, flowName);
+        this.createManifest(flowDir, flowName, symbolicName);
 
         // Create .project
         this.createProject(flowDir, flowName);
@@ -71,11 +79,11 @@ export class IflowPackager {
         console.log(`✅ Generated ${outputZip}`);
     }
 
-    private createManifest(flowDir: string, flowName: string): void {
+    private createManifest(flowDir: string, flowName: string, symbolicNameOverride?: string): void {
         const metaInfDir = path.join(flowDir, 'META-INF');
         fs.mkdirSync(metaInfDir, { recursive: true });
 
-        const symbolicName = flowName.replace(/\s+/g, '_');
+        const symbolicName = symbolicNameOverride ?? flowName.replace(/\s+/g, '_');
         const manifest = [
             'Manifest-Version: 1.0',
             'Bundle-ManifestVersion: 2',

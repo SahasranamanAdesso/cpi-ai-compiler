@@ -75,6 +75,14 @@ export class IntegrationFlowGenerator {
      *
      * @param request - Natural language description
      * @param outputPath - Path for generated .zip file
+     * @param artifactId - Optional stable identity for the packaged ZIP's
+     *   Bundle-SymbolicName. The AI may name the generated flow differently
+     *   on every call (e.g. across Fix & Redeploy attempts), but SAP CPI
+     *   refuses to update an existing designtime artifact if the new ZIP's
+     *   symbolic name differs from the one currently deployed under that
+     *   artifact ID. Callers that redeploy to a fixed artifact ID across
+     *   multiple attempts should pass that ID here so every attempt packages
+     *   with the same symbolic name and updates succeed.
      * @returns Result with generation metadata and output path
      *
      * @example
@@ -91,7 +99,8 @@ export class IntegrationFlowGenerator {
      */
     async generate(
         request: string,
-        outputPath: string
+        outputPath: string,
+        artifactId?: string
     ): Promise<IntegrationFlowResult> {
         const startTime = Date.now();
 
@@ -146,7 +155,7 @@ export class IntegrationFlowGenerator {
 
             // Step 5: Package to .zip
             console.log('\n📦 Packaging to .zip...');
-            await this.packager.package(tempDir, flow.name, outputPath);
+            await this.packager.package(tempDir, flow.name, outputPath, undefined, artifactId);
             console.log(`✅ Package created: ${outputPath}`);
 
             // Clean up temp directory
